@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'dart:io';
 
 const String kApiBase = 'https://zetra-backend.onrender.com/api';
+
+const Color kZetraGreen = Color(0xFF008751);
+const Color kZetraGreenDark = Color(0xFF00623B);
 
 void main() {
   runApp(const ZetraIdApp());
@@ -16,17 +21,60 @@ class ZetraIdApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Zetra ID',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primarySwatch: Colors.green,
         useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: kZetraGreen,
+          primary: kZetraGreen,
+          brightness: Brightness.light,
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF6FBF8),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: kZetraGreen,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          centerTitle: true,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: kZetraGreen,
+            foregroundColor: Colors.white,
+            minimumSize: const Size.fromHeight(50),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: kZetraGreen, width: 2),
+          ),
+        ),
       ),
       home: const AuthGate(),
     );
   }
 }
 
-/// Decides whether to show the login/register screen or the home
-/// screen, based on whether a token is already stored.
+/// Friendly, typed representation of anything that can go wrong
+/// on a network call, so the UI can react appropriately.
+class ApiFailure {
+  final String message;
+  final bool isNetworkError;
+  ApiFailure(this.message, {this.isNetworkError = false});
+}
+
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 
@@ -63,7 +111,9 @@ class _AuthGateState extends State<AuthGate> {
   @override
   Widget build(BuildContext context) {
     if (_checking) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: kZetraGreen)),
+      );
     }
     if (_token == null) {
       return AuthScreen(onAuthenticated: _onAuthenticated);
@@ -72,7 +122,6 @@ class _AuthGateState extends State<AuthGate> {
   }
 }
 
-/// Combined Register / Login screen.
 class AuthScreen extends StatefulWidget {
   final void Function(String token) onAuthenticated;
   const AuthScreen({super.key, required this.onAuthenticated});
@@ -84,6 +133,7 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   bool _isRegisterMode = true;
   bool _isLoading = false;
+  bool _obscurePassword = true;
   String? _errorMessage;
 
   final _usernameController = TextEditingController();
@@ -102,7 +152,32 @@ class _AuthScreenState extends State<AuthScreen> {
     super.dispose();
   }
 
+  String? _validate() {
+    if (_isRegisterMode) {
+      if (_usernameController.text.trim().length < 3) {
+        return 'Username must be at least 3 characters.';
+      }
+      if (!_emailController.text.contains('@')) {
+        return 'Enter a valid email address.';
+      }
+    } else {
+      if (_identifierController.text.trim().isEmpty) {
+        return 'Enter your Zetra ID, username, ZetraMail, phone, or email.';
+      }
+    }
+    if (_passwordController.text.length < 8) {
+      return 'Password must be at least 8 characters.';
+    }
+    return null;
+  }
+
   Future<void> _submit() async {
+    final validationError = _validate();
+    if (validationError != null) {
+      setState(() => _errorMessage = validationError);
+      return;
+    }
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -126,11 +201,13 @@ class _AuthScreenState extends State<AuthScreen> {
               'password': _passwordController.text,
             };
 
-      final response = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(body),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = jsonDecode(response.body);
@@ -138,9 +215,7 @@ class _AuthScreenState extends State<AuthScreen> {
         final refreshToken = data['refresh_token'] as String?;
 
         if (accessToken == null) {
-          setState(() {
-            _errorMessage = 'No access token in response.';
-          });
+          setState(() => _errorMessage = 'Unexpected response from server. Please try again.');
           return;
         }
 
@@ -150,126 +225,234 @@ class _AuthScreenState extends State<AuthScreen> {
           await prefs.setString('refresh_token', refreshToken);
         }
 
-        widget.onAuthenticated(accessToken);
+        if (!mounted) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => WelcomeScreen(
+              username: (data['user']?['username'] as String?) ?? '',
+              onContinue: () => widget.onAuthenticated(accessToken),
+            ),
+          ),
+        );
+      } else if (response.statusCode == 409) {
+        setState(() => _errorMessage = 'That username, email, phone, or ZetraMail is already taken.');
+      } else if (response.statusCode == 401) {
+        setState(() => _errorMessage = 'Incorrect details. Please check and try again.');
+      } else if (response.statusCode == 422) {
+        setState(() => _errorMessage = _parseServerError(response.body) ?? 'Please check the details you entered.');
       } else {
-        String message = 'Error: ${response.statusCode}';
-        try {
-          final data = jsonDecode(response.body);
-          if (data['error'] != null) message = data['error'].toString();
-        } catch (_) {}
-        setState(() => _errorMessage = message);
+        setState(() => _errorMessage = _parseServerError(response.body) ?? 'Something went wrong (${response.statusCode}). Please try again.');
       }
+    } on SocketException {
+      setState(() => _errorMessage = 'No internet connection. Check your network and try again.');
+    } on HttpException {
+      setState(() => _errorMessage = 'Could not reach the server. Please try again.');
     } catch (e) {
-      setState(() => _errorMessage = 'Failed to connect to the backend: $e');
+      setState(() => _errorMessage = 'Something went wrong. Please try again.');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  String? _parseServerError(String body) {
+    try {
+      final data = jsonDecode(body);
+      return data['error']?.toString();
+    } catch (_) {
+      return null;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Zetra ID')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 20),
-            Text(
-              _isRegisterMode ? 'Create your Zetra ID' : 'Log in to Zetra',
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            if (_isRegisterMode) ...[
-              TextField(
-                controller: _usernameController,
-                decoration: const InputDecoration(
-                  labelText: 'Username',
-                  border: OutlineInputBorder(),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 32),
+              Center(
+                child: Container(
+                  width: 84,
+                  height: 84,
+                  decoration: BoxDecoration(
+                    color: kZetraGreen,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Icon(Icons.badge_outlined, color: Colors.white, size: 44),
                 ),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _phoneController,
-                keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(
-                  labelText: 'Phone (optional)',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ] else ...[
-              TextField(
-                controller: _identifierController,
-                decoration: const InputDecoration(
-                  labelText: 'Zetra ID, username, ZetraMail, phone, or email',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            TextField(
-              controller: _passwordController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Password',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _isLoading ? null : _submit,
-              child: _isLoading
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : Text(_isRegisterMode ? 'Register' : 'Log In'),
-            ),
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: _isLoading
-                  ? null
-                  : () => setState(() {
-                        _isRegisterMode = !_isRegisterMode;
-                        _errorMessage = null;
-                      }),
-              child: Text(
-                _isRegisterMode
-                    ? 'Already have an account? Log in'
-                    : "Don't have an account? Register",
-              ),
-            ),
-            if (_errorMessage != null) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
               Text(
-                _errorMessage!,
-                style: const TextStyle(color: Colors.red),
+                _isRegisterMode ? 'Create your Zetra ID' : 'Welcome back',
+                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
+              const SizedBox(height: 6),
+              Text(
+                _isRegisterMode
+                    ? 'One identity for every Zetra app'
+                    : 'Log in with your Zetra ID, username, ZetraMail, phone, or email',
+                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 32),
+              if (_isRegisterMode) ...[
+                TextField(
+                  controller: _usernameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Username',
+                    prefixIcon: Icon(Icons.person_outline),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    prefixIcon: Icon(Icons.mail_outline),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Phone (optional)',
+                    prefixIcon: Icon(Icons.phone_outlined),
+                  ),
+                ),
+              ] else ...[
+                TextField(
+                  controller: _identifierController,
+                  decoration: const InputDecoration(
+                    labelText: 'Zetra ID / username / ZetraMail / phone / email',
+                    prefixIcon: Icon(Icons.person_outline),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              TextField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              if (_errorMessage != null) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.red.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _errorMessage!,
+                          style: TextStyle(color: Colors.red.shade700, fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+              ElevatedButton(
+                onPressed: _isLoading ? null : _submit,
+                child: _isLoading
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                      )
+                    : Text(_isRegisterMode ? 'Create Zetra ID' : 'Log In'),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: _isLoading
+                    ? null
+                    : () => setState(() {
+                          _isRegisterMode = !_isRegisterMode;
+                          _errorMessage = null;
+                        }),
+                child: Text(
+                  _isRegisterMode
+                      ? 'Already have a Zetra ID? Log in'
+                      : "Don't have a Zetra ID? Create one",
+                  style: const TextStyle(color: kZetraGreenDark, fontWeight: FontWeight.w600),
+                ),
+              ),
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// Shows the logged-in user's Zetra ID and related identifiers.
+/// Shown once, right after registering or logging in.
+class WelcomeScreen extends StatelessWidget {
+  final String username;
+  final VoidCallback onContinue;
+  const WelcomeScreen({super.key, required this.username, required this.onContinue});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kZetraGreen,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.check_circle, color: Colors.white, size: 88),
+              const SizedBox(height: 24),
+              Text(
+                username.isNotEmpty ? 'Welcome, $username!' : 'Welcome to Zetra!',
+                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Your Zetra ID is ready. It works across every Zetra app — NAI, Nigergram, ZTC, and more.',
+                style: TextStyle(fontSize: 15, color: Colors.white70),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 40),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: kZetraGreen,
+                  ),
+                  onPressed: onContinue,
+                  child: const Text('Continue'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class HomeScreen extends StatefulWidget {
   final String token;
   final VoidCallback onLoggedOut;
@@ -281,7 +464,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
-  String? _errorMessage;
+  ApiFailure? _failure;
   Map<String, dynamic>? _user;
 
   @override
@@ -293,26 +476,28 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _fetchZetraId() async {
     setState(() {
       _isLoading = true;
-      _errorMessage = null;
+      _failure = null;
     });
 
     try {
       final response = await http.get(
         Uri.parse('$kApiBase/users/me/zetra-id'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
-      );
+      ).timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
         setState(() => _user = jsonDecode(response.body));
       } else if (response.statusCode == 401) {
         await _logout();
       } else {
-        setState(() => _errorMessage = 'Error: ${response.statusCode}\n${response.body}');
+        setState(() => _failure = ApiFailure('Could not load your Zetra ID (${response.statusCode}).'));
       }
+    } on SocketException {
+      setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
     } catch (e) {
-      setState(() => _errorMessage = 'Failed to connect to the backend: $e');
+      setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -323,18 +508,77 @@ class _HomeScreenState extends State<HomeScreen> {
     widget.onLoggedOut();
   }
 
-  Widget _infoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 90,
-            child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+  void _confirmLogout() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text('You will need to log in again to see your Zetra ID.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _logout();
+            },
+            child: const Text('Log out', style: TextStyle(color: Colors.red)),
           ),
+        ],
+      ),
+    );
+  }
+
+  void _copyToClipboard(String label, String value) {
+    Clipboard.setData(ClipboardData(text: value));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$label copied'),
+        backgroundColor: kZetraGreenDark,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Widget _identityCard(String label, String value, IconData icon) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: kZetraGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: kZetraGreen, size: 20),
+          ),
+          const SizedBox(width: 12),
           Expanded(
-            child: SelectableText(value, style: const TextStyle(fontFamily: 'monospace')),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.copy_outlined, size: 20, color: kZetraGreenDark),
+            onPressed: () => _copyToClipboard(label, value),
+            tooltip: 'Copy $label',
           ),
         ],
       ),
@@ -347,51 +591,45 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Zetra ID'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _logout,
-            tooltip: 'Log out',
-          ),
+          IconButton(icon: const Icon(Icons.logout), onPressed: _confirmLogout, tooltip: 'Log out'),
         ],
       ),
       body: RefreshIndicator(
+        color: kZetraGreen,
         onRefresh: _fetchZetraId,
         child: ListView(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(20.0),
           children: [
-            const SizedBox(height: 12),
             if (_isLoading)
-              const Center(child: CircularProgressIndicator())
-            else if (_errorMessage != null)
-              Column(
-                children: [
-                  Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: Colors.red),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  ElevatedButton(onPressed: _fetchZetraId, child: const Text('Retry')),
-                ],
+              const Padding(
+                padding: EdgeInsets.only(top: 60),
+                child: Center(child: CircularProgressIndicator(color: kZetraGreen)),
               )
-            else if (_user != null)
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+            else if (_failure != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 60),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _infoRow('Zetra ID', _user!['zetra_id'] ?? '-'),
-                    _infoRow('Username', _user!['username'] ?? '-'),
-                    _infoRow('ZetraMail', _user!['zetramail'] ?? '-'),
-                    _infoRow('Email', _user!['email'] ?? '-'),
-                    if (_user!['phone'] != null) _infoRow('Phone', _user!['phone']),
+                    Icon(
+                      _failure!.isNetworkError ? Icons.wifi_off : Icons.error_outline,
+                      size: 48,
+                      color: Colors.grey.shade400,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(_failure!.message, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700)),
+                    const SizedBox(height: 16),
+                    ElevatedButton(onPressed: _fetchZetraId, child: const Text('Retry')),
                   ],
                 ),
-              ),
+              )
+            else if (_user != null) ...[
+              _identityCard('Zetra ID', _user!['zetra_id'] ?? '-', Icons.badge_outlined),
+              _identityCard('Username', _user!['username'] ?? '-', Icons.person_outline),
+              _identityCard('ZetraMail', _user!['zetramail'] ?? '-', Icons.mail_outline),
+              _identityCard('Email', _user!['email'] ?? '-', Icons.alternate_email),
+              if (_user!['phone'] != null)
+                _identityCard('Phone', _user!['phone'], Icons.phone_outlined),
+            ],
           ],
         ),
       ),
