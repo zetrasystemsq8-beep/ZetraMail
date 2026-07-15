@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.nigergram.app"
+    namespace = "com.zetrasystems.zetramail"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -19,17 +19,8 @@ android {
         jvmTarget = JavaVersion.VERSION_11.toString()
     }
 
-    signingConfigs {
-        create("release") {
-            storeFile = file("nigergram.jks")
-            storePassword = "nigergram123"
-            keyAlias = "nigergram"
-            keyPassword = "nigergram123"
-        }
-    }
-
     defaultConfig {
-        applicationId = "com.nigergram.app"
+        applicationId = "com.zetrasystems.zetramail"
         minSdk = 21
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -40,13 +31,9 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
@@ -54,4 +41,3 @@ android {
 flutter {
     source = "../.."
 }
-
