@@ -1,0 +1,11 @@
+{
+  "entries": [
+    {
+      "id": "e7d2cc0b-7167-4b07-9843-d7edef2461ac",
+      "kind": "goal",
+      "title": "Zetra ID MVP Goal",
+      "content": "Project rebranded to Zetra ID. All demo code removed. Single screen app to generate a Zetra ID via backend API. Backend: https://zetra-backend.onrender.com/api/identity/create. Package name: com.zetrasystems.zetraid.",
+      "updatedAt": "2026-07-15T15:51:05.419Z"
+    }
+  ]
+}
