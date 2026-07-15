@@ -1,5 +1,0 @@
-package com.zetrasystems.zetramail
-
-import io.flutter.embedding.android.FlutterActivity
-
-class MainActivity : FlutterActivity()
