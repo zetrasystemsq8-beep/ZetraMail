@@ -1,4 +1,4 @@
-package com.nigergram.app
+package com.ZetraMail.app
 
 import io.flutter.embedding.android.FlutterActivity
 
