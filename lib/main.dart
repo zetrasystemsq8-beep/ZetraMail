@@ -438,7 +438,14 @@ class WelcomeScreen extends StatelessWidget {
                     backgroundColor: Colors.white,
                     foregroundColor: kZetraGreen,
                   ),
-                  onPressed: onContinue,
+                  onPressed: () {
+                    // Close this screen's own route first, then hand
+                    // control back to AuthGate so it can swap in
+                    // RootScreen — otherwise this route stays on top
+                    // of the navigator stack forever.
+                    Navigator.of(context).pop();
+                    onContinue();
+                  },
                   child: const Text('Continue'),
                 ),
               ),
