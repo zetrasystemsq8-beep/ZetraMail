@@ -67,8 +67,6 @@ class ZetraIdApp extends StatelessWidget {
   }
 }
 
-/// Friendly, typed representation of anything that can go wrong
-/// on a network call, so the UI can react appropriately.
 class ApiFailure {
   final String message;
   final bool isNetworkError;
@@ -118,7 +116,7 @@ class _AuthGateState extends State<AuthGate> {
     if (_token == null) {
       return AuthScreen(onAuthenticated: _onAuthenticated);
     }
-    return HomeScreen(token: _token!, onLoggedOut: _onLoggedOut);
+    return RootScreen(token: _token!, onLoggedOut: _onLoggedOut);
   }
 }
 
@@ -404,7 +402,6 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 }
 
-/// Shown once, right after registering or logging in.
 class WelcomeScreen extends StatelessWidget {
   final String username;
   final VoidCallback onContinue;
@@ -448,6 +445,52 @@ class WelcomeScreen extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Hosts the bottom navigation: Zetra ID tab and Messages tab.
+class RootScreen extends StatefulWidget {
+  final String token;
+  final VoidCallback onLoggedOut;
+  const RootScreen({super.key, required this.token, required this.onLoggedOut});
+
+  @override
+  State<RootScreen> createState() => _RootScreenState();
+}
+
+class _RootScreenState extends State<RootScreen> {
+  int _tabIndex = 0;
+  int _unreadCount = 0;
+
+  void _updateUnreadCount(int count) {
+    if (mounted) setState(() => _unreadCount = count);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screens = [
+      HomeScreen(token: widget.token, onLoggedOut: widget.onLoggedOut),
+      MessagesScreen(token: widget.token, onUnreadCountChanged: _updateUnreadCount),
+    ];
+
+    return Scaffold(
+      body: IndexedStack(index: _tabIndex, children: screens),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tabIndex,
+        onDestinationSelected: (i) => setState(() => _tabIndex = i),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.badge_outlined), label: 'Zetra ID'),
+          NavigationDestination(
+            icon: Badge(
+              label: Text('$_unreadCount'),
+              isLabelVisible: _unreadCount > 0,
+              child: const Icon(Icons.mail_outline),
+            ),
+            label: 'Messages',
+          ),
+        ],
       ),
     );
   }
@@ -632,6 +675,245 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Inbox of messages/verification codes sent from other Zetra apps.
+class MessagesScreen extends StatefulWidget {
+  final String token;
+  final void Function(int unreadCount) onUnreadCountChanged;
+  const MessagesScreen({super.key, required this.token, required this.onUnreadCountChanged});
+
+  @override
+  State<MessagesScreen> createState() => _MessagesScreenState();
+}
+
+class _MessagesScreenState extends State<MessagesScreen> {
+  bool _isLoading = true;
+  ApiFailure? _failure;
+  List<dynamic> _messages = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchMessages();
+  }
+
+  Future<void> _fetchMessages() async {
+    setState(() {
+      _isLoading = true;
+      _failure = null;
+    });
+
+    try {
+      final response = await http.get(
+        Uri.parse('$kApiBase/users/me/messages'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      ).timeout(const Duration(seconds: 20));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as List<dynamic>;
+        setState(() => _messages = data);
+        final unread = data.where((m) => m['read_at'] == null).length;
+        widget.onUnreadCountChanged(unread);
+      } else {
+        setState(() => _failure = ApiFailure('Could not load messages (${response.statusCode}).'));
+      }
+    } on SocketException {
+      setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
+    } catch (e) {
+      setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _markRead(String id, int index) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$kApiBase/messages/$id/read'),
+        headers: {'Authorization': 'Bearer ${widget.token}'},
+      );
+      if (response.statusCode == 200) {
+        setState(() => _messages[index] = jsonDecode(response.body));
+        final unread = _messages.where((m) => m['read_at'] == null).length;
+        widget.onUnreadCountChanged(unread);
+      }
+    } catch (_) {
+      // Silent — marking read is a background nicety, not worth
+      // interrupting the user with an error for.
+    }
+  }
+
+  void _copyCode(String code) {
+    Clipboard.setData(ClipboardData(text: code));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Code copied'),
+        backgroundColor: kZetraGreenDark,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  String _timeAgo(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    final diff = DateTime.now().toUtc().difference(dt.toUtc());
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Messages')),
+      body: RefreshIndicator(
+        color: kZetraGreen,
+        onRefresh: _fetchMessages,
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator(color: kZetraGreen))
+            : _failure != null
+                ? ListView(
+                    children: [
+                      const SizedBox(height: 80),
+                      Icon(
+                        _failure!.isNetworkError ? Icons.wifi_off : Icons.error_outline,
+                        size: 48,
+                        color: Colors.grey.shade400,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(_failure!.message, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700)),
+                      const SizedBox(height: 16),
+                      Center(child: ElevatedButton(onPressed: _fetchMessages, child: const Text('Retry'))),
+                    ],
+                  )
+                : _messages.isEmpty
+                    ? ListView(
+                        children: [
+                          const SizedBox(height: 100),
+                          Icon(Icons.mail_outline, size: 56, color: Colors.grey.shade400),
+                          const SizedBox(height: 12),
+                          Text(
+                            'No messages yet',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey.shade600, fontSize: 15),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Verification codes from other Zetra apps will appear here.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+                          ),
+                        ],
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _messages.length,
+                        itemBuilder: (context, index) {
+                          final m = _messages[index];
+                          final isUnread = m['read_at'] == null;
+                          final code = m['code'] as String?;
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              border: isUnread ? Border.all(color: kZetraGreen.withOpacity(0.4)) : null,
+                              boxShadow: [
+                                BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    if (isUnread)
+                                      Container(
+                                        width: 8,
+                                        height: 8,
+                                        margin: const EdgeInsets.only(right: 8),
+                                        decoration: const BoxDecoration(color: kZetraGreen, shape: BoxShape.circle),
+                                      ),
+                                    Expanded(
+                                      child: Text(
+                                        (m['from_app'] as String? ?? 'zetra').toUpperCase(),
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: kZetraGreenDark,
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      _timeAgo(m['created_at'] as String? ?? ''),
+                                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  m['subject'] as String? ?? '',
+                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  m['body'] as String? ?? '',
+                                  style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
+                                ),
+                                if (code != null) ...[
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                        decoration: BoxDecoration(
+                                          color: kZetraGreen.withOpacity(0.08),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          code,
+                                          style: const TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            fontFamily: 'monospace',
+                                            letterSpacing: 2,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        icon: const Icon(Icons.copy_outlined, size: 20, color: kZetraGreenDark),
+                                        onPressed: () => _copyCode(code),
+                                        tooltip: 'Copy code',
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                                if (isUnread) ...[
+                                  const SizedBox(height: 8),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: TextButton(
+                                      onPressed: () => _markRead(m['id'] as String, index),
+                                      child: const Text('Mark as read'),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          );
+                        },
+                      ),
       ),
     );
   }
