@@ -439,10 +439,6 @@ class WelcomeScreen extends StatelessWidget {
                     foregroundColor: kZetraGreen,
                   ),
                   onPressed: () {
-                    // Close this screen's own route first, then hand
-                    // control back to AuthGate so it can swap in
-                    // RootScreen — otherwise this route stays on top
-                    // of the navigator stack forever.
                     Navigator.of(context).pop();
                     onContinue();
                   },
@@ -457,7 +453,7 @@ class WelcomeScreen extends StatelessWidget {
   }
 }
 
-/// Hosts the bottom navigation: Zetra ID tab and Messages tab.
+/// Hosts the bottom navigation: Zetra ID tab and ZetraMail tab.
 class RootScreen extends StatefulWidget {
   final String token;
   final VoidCallback onLoggedOut;
@@ -495,7 +491,7 @@ class _RootScreenState extends State<RootScreen> {
               isLabelVisible: _unreadCount > 0,
               child: const Icon(Icons.mail_outline),
             ),
-            label: 'Messages',
+            label: 'ZetraMail',
           ),
         ],
       ),
@@ -687,7 +683,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// Inbox of messages/verification codes sent from other Zetra apps.
+/// ZetraMail inbox: verification codes and messages sent from
+/// other Zetra apps and from Zetra itself.
 class MessagesScreen extends StatefulWidget {
   final String token;
   final void Function(int unreadCount) onUnreadCountChanged;
@@ -726,7 +723,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
         final unread = data.where((m) => m['read_at'] == null).length;
         widget.onUnreadCountChanged(unread);
       } else {
-        setState(() => _failure = ApiFailure('Could not load messages (${response.statusCode}).'));
+        setState(() => _failure = ApiFailure('Could not load ZetraMail (${response.statusCode}).'));
       }
     } on SocketException {
       setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
@@ -779,7 +776,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Messages')),
+      appBar: AppBar(title: const Text('ZetraMail')),
       body: RefreshIndicator(
         color: kZetraGreen,
         onRefresh: _fetchMessages,
@@ -807,7 +804,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
                           Icon(Icons.mail_outline, size: 56, color: Colors.grey.shade400),
                           const SizedBox(height: 12),
                           Text(
-                            'No messages yet',
+                            'No mail yet',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.grey.shade600, fontSize: 15),
                           ),
