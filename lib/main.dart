@@ -11,8 +11,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // The anon key is safe to ship in a client app — it has no privileges
 // beyond what RLS policies grant it.
 // =====================================================================
-const String kSupabaseUrl = 'https://YOUR-PROJECT-REF.supabase.co';
-const String kSupabaseAnonKey = 'YOUR-SUPABASE-ANON-KEY';
+const String kSupabaseUrl = 'https://ssmwuihkafrulmvtiuam.supabase.co';
+const String kSupabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNzbXd1aWhrYWZydWxtdnRpdWFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4Mjk2NjAsImV4cCI6MjA5NjQwNTY2MH0.e1PxmDW77ZhbonS-Z96SWA_sPyVGedzpZNZbJQz7pQo';
 
 const Color kZetraGreen = Color(0xFF008751);
 const Color kZetraGreenDark = Color(0xFF00623B);
