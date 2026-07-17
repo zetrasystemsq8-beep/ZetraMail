@@ -1,16 +1,30 @@
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
-const String kApiBase = 'https://zetra-backend.onrender.com/api';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+// =====================================================================
+// Supabase project configuration.
+// Replace with your project's values from Project Settings -> API.
+// The anon key is safe to ship in a client app — it has no privileges
+// beyond what RLS policies grant it.
+// =====================================================================
+const String kSupabaseUrl = 'https://YOUR-PROJECT-REF.supabase.co';
+const String kSupabaseAnonKey = 'YOUR-SUPABASE-ANON-KEY';
 
 const Color kZetraGreen = Color(0xFF008751);
 const Color kZetraGreenDark = Color(0xFF00623B);
 
-void main() {
+SupabaseClient get supabase => Supabase.instance.client;
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(
+    url: kSupabaseUrl,
+    anonKey: kSupabaseAnonKey,
+  );
   runApp(const ZetraIdApp());
 }
 
@@ -73,6 +87,22 @@ class ApiFailure {
   ApiFailure(this.message, {this.isNetworkError = false});
 }
 
+// =====================================================================
+// AuthGate
+//
+// On cold start, trusts Supabase's own persisted session (it restores
+// this itself before Supabase.initialize() returns) to decide whether
+// to show AuthScreen or RootScreen — no WelcomeScreen on a returning
+// user, same as the original SharedPreferences-token check.
+//
+// After a fresh sign-up/sign-in, the session becomes non-null
+// immediately, but _authenticated is intentionally NOT flipped by the
+// auth-state stream at that moment — AuthScreen pushes WelcomeScreen
+// first, and only calls onAuthenticated() when the user taps
+// "Continue", exactly matching the original UX. The stream is used
+// only to catch involuntary sign-outs (expired/revoked session),
+// which immediately bounce the user back to AuthScreen.
+// =====================================================================
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 
@@ -81,47 +111,46 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
-  bool _checking = true;
-  String? _token;
+  bool _authenticated = false;
+  late final StreamSubscription<AuthState> _authSubscription;
 
   @override
   void initState() {
     super.initState();
-    _loadToken();
-  }
-
-  Future<void> _loadToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _token = prefs.getString('access_token');
-      _checking = false;
+    _authenticated = supabase.auth.currentSession != null;
+    _authSubscription = supabase.auth.onAuthStateChange.listen((data) {
+      if (!mounted) return;
+      if (data.event == AuthChangeEvent.signedOut) {
+        setState(() => _authenticated = false);
+      }
     });
   }
 
-  void _onAuthenticated(String token) {
-    setState(() => _token = token);
+  @override
+  void dispose() {
+    _authSubscription.cancel();
+    super.dispose();
+  }
+
+  void _onAuthenticated() {
+    setState(() => _authenticated = true);
   }
 
   void _onLoggedOut() {
-    setState(() => _token = null);
+    setState(() => _authenticated = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_checking) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: kZetraGreen)),
-      );
-    }
-    if (_token == null) {
+    if (!_authenticated) {
       return AuthScreen(onAuthenticated: _onAuthenticated);
     }
-    return RootScreen(token: _token!, onLoggedOut: _onLoggedOut);
+    return RootScreen(onLoggedOut: _onLoggedOut);
   }
 }
 
 class AuthScreen extends StatefulWidget {
-  final void Function(String token) onAuthenticated;
+  final VoidCallback onAuthenticated;
   const AuthScreen({super.key, required this.onAuthenticated});
 
   @override
@@ -182,68 +211,22 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
-      final uri = Uri.parse(
-        _isRegisterMode ? '$kApiBase/auth/register' : '$kApiBase/auth/login',
-      );
-
-      final Map<String, dynamic> body = _isRegisterMode
-          ? {
-              'username': _usernameController.text.trim(),
-              'email': _emailController.text.trim(),
-              'password': _passwordController.text,
-              if (_phoneController.text.trim().isNotEmpty)
-                'phone': _phoneController.text.trim(),
-            }
-          : {
-              'identifier': _identifierController.text.trim(),
-              'password': _passwordController.text,
-            };
-
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(seconds: 20));
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        final accessToken = data['access_token'] as String?;
-        final refreshToken = data['refresh_token'] as String?;
-
-        if (accessToken == null) {
-          setState(() => _errorMessage = 'Unexpected response from server. Please try again.');
-          return;
-        }
-
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('access_token', accessToken);
-        if (refreshToken != null) {
-          await prefs.setString('refresh_token', refreshToken);
-        }
-
-        if (!mounted) return;
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => WelcomeScreen(
-              username: (data['user']?['username'] as String?) ?? '',
-              onContinue: () => widget.onAuthenticated(accessToken),
-            ),
-          ),
-        );
-      } else if (response.statusCode == 409) {
-        setState(() => _errorMessage = 'That username, email, phone, or ZetraMail is already taken.');
-      } else if (response.statusCode == 401) {
-        setState(() => _errorMessage = 'Incorrect details. Please check and try again.');
-      } else if (response.statusCode == 422) {
-        setState(() => _errorMessage = _parseServerError(response.body) ?? 'Please check the details you entered.');
+      if (_isRegisterMode) {
+        await _submitRegister();
       } else {
-        setState(() => _errorMessage = _parseServerError(response.body) ?? 'Something went wrong (${response.statusCode}). Please try again.');
+        await _submitLogin();
       }
+    } on AuthException catch (e) {
+      setState(() {
+        _errorMessage = _isRegisterMode
+            ? (e.message.isNotEmpty ? e.message : 'Something went wrong. Please try again.')
+            : 'Incorrect login credentials. Please check and try again.';
+      });
+    } on PostgrestException catch (_) {
+      setState(() => _errorMessage = 'Something went wrong. Please try again.');
     } on SocketException {
       setState(() => _errorMessage = 'No internet connection. Check your network and try again.');
-    } on HttpException {
+    } on TimeoutException {
       setState(() => _errorMessage = 'Could not reach the server. Please try again.');
     } catch (e) {
       setState(() => _errorMessage = 'Something went wrong. Please try again.');
@@ -252,13 +235,95 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  String? _parseServerError(String body) {
-    try {
-      final data = jsonDecode(body);
-      return data['error']?.toString();
-    } catch (_) {
-      return null;
+  Future<void> _submitRegister() async {
+    final username = _usernameController.text.trim();
+    final email = _emailController.text.trim();
+    final phone = _phoneController.text.trim();
+    final password = _passwordController.text;
+
+    final availabilityRaw = await supabase
+        .rpc('check_registration_availability', params: {
+          'p_username': username,
+          'p_email': email,
+          'p_phone': phone.isEmpty ? null : phone,
+        })
+        .timeout(const Duration(seconds: 20));
+
+    final availability = Map<String, dynamic>.from(availabilityRaw as Map);
+
+    if (availability['username_taken'] == true) {
+      setState(() => _errorMessage = 'That username is already taken.');
+      return;
     }
+    if (availability['email_taken'] == true) {
+      setState(() => _errorMessage = 'That email is already registered.');
+      return;
+    }
+    if (availability['phone_taken'] == true) {
+      setState(() => _errorMessage = 'That phone number is already registered.');
+      return;
+    }
+
+    final response = await supabase.auth
+        .signUp(
+          email: email,
+          password: password,
+          data: {
+            'username': username,
+            if (phone.isNotEmpty) 'phone': phone,
+          },
+        )
+        .timeout(const Duration(seconds: 20));
+
+    if (response.session == null) {
+      setState(() => _errorMessage = 'Check your email to confirm your account, then log in.');
+      return;
+    }
+
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WelcomeScreen(
+          username: username,
+          onContinue: widget.onAuthenticated,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _submitLogin() async {
+    final identifier = _identifierController.text.trim();
+    final password = _passwordController.text;
+
+    final resolvedEmail = await supabase
+        .rpc('resolve_login_email', params: {'p_identifier': identifier})
+        .timeout(const Duration(seconds: 20)) as String?;
+
+    if (resolvedEmail == null) {
+      setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
+      return;
+    }
+
+    final response = await supabase.auth
+        .signInWithPassword(email: resolvedEmail, password: password)
+        .timeout(const Duration(seconds: 20));
+
+    if (response.session == null) {
+      setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
+      return;
+    }
+
+    final username = (response.user?.userMetadata?['username'] as String?) ?? '';
+
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WelcomeScreen(
+          username: username,
+          onContinue: widget.onAuthenticated,
+        ),
+      ),
+    );
   }
 
   @override
@@ -455,9 +520,8 @@ class WelcomeScreen extends StatelessWidget {
 
 /// Hosts the bottom navigation: Zetra ID tab and ZetraMail tab.
 class RootScreen extends StatefulWidget {
-  final String token;
   final VoidCallback onLoggedOut;
-  const RootScreen({super.key, required this.token, required this.onLoggedOut});
+  const RootScreen({super.key, required this.onLoggedOut});
 
   @override
   State<RootScreen> createState() => _RootScreenState();
@@ -474,8 +538,8 @@ class _RootScreenState extends State<RootScreen> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      HomeScreen(token: widget.token, onLoggedOut: widget.onLoggedOut),
-      MessagesScreen(token: widget.token, onUnreadCountChanged: _updateUnreadCount),
+      HomeScreen(onLoggedOut: widget.onLoggedOut),
+      MessagesScreen(onUnreadCountChanged: _updateUnreadCount),
     ];
 
     return Scaffold(
@@ -500,9 +564,8 @@ class _RootScreenState extends State<RootScreen> {
 }
 
 class HomeScreen extends StatefulWidget {
-  final String token;
   final VoidCallback onLoggedOut;
-  const HomeScreen({super.key, required this.token, required this.onLoggedOut});
+  const HomeScreen({super.key, required this.onLoggedOut});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -526,20 +589,31 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      final response = await http.get(
-        Uri.parse('$kApiBase/users/me/zetra-id'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      ).timeout(const Duration(seconds: 20));
-
-      if (response.statusCode == 200) {
-        setState(() => _user = jsonDecode(response.body));
-      } else if (response.statusCode == 401) {
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) {
         await _logout();
-      } else {
-        setState(() => _failure = ApiFailure('Could not load your Zetra ID (${response.statusCode}).'));
+        return;
       }
+
+      final data = await supabase
+          .from('profiles')
+          .select('zetra_id, username, zetramail, email, phone')
+          .eq('id', userId)
+          .single()
+          .timeout(const Duration(seconds: 20));
+
+      setState(() => _user = Map<String, dynamic>.from(data));
+    } on PostgrestException catch (e) {
+      final isAuthError = e.code == 'PGRST301' || e.message.toLowerCase().contains('jwt');
+      if (isAuthError) {
+        await _logout();
+        return;
+      }
+      setState(() => _failure = ApiFailure('Could not load your Zetra ID (${e.code ?? 'error'}).'));
     } on SocketException {
       setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
+    } on TimeoutException {
+      setState(() => _failure = ApiFailure('The request timed out. Please try again.', isNetworkError: true));
     } catch (e) {
       setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
     } finally {
@@ -548,9 +622,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('access_token');
-    await prefs.remove('refresh_token');
+    await supabase.auth.signOut();
     widget.onLoggedOut();
   }
 
@@ -686,9 +758,8 @@ class _HomeScreenState extends State<HomeScreen> {
 /// ZetraMail inbox: verification codes and messages sent from
 /// other Zetra apps and from Zetra itself.
 class MessagesScreen extends StatefulWidget {
-  final String token;
   final void Function(int unreadCount) onUnreadCountChanged;
-  const MessagesScreen({super.key, required this.token, required this.onUnreadCountChanged});
+  const MessagesScreen({super.key, required this.onUnreadCountChanged});
 
   @override
   State<MessagesScreen> createState() => _MessagesScreenState();
@@ -697,7 +768,7 @@ class MessagesScreen extends StatefulWidget {
 class _MessagesScreenState extends State<MessagesScreen> {
   bool _isLoading = true;
   ApiFailure? _failure;
-  List<dynamic> _messages = [];
+  List<Map<String, dynamic>> _messages = [];
 
   @override
   void initState() {
@@ -712,21 +783,29 @@ class _MessagesScreenState extends State<MessagesScreen> {
     });
 
     try {
-      final response = await http.get(
-        Uri.parse('$kApiBase/users/me/messages'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      ).timeout(const Duration(seconds: 20));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as List<dynamic>;
-        setState(() => _messages = data);
-        final unread = data.where((m) => m['read_at'] == null).length;
-        widget.onUnreadCountChanged(unread);
-      } else {
-        setState(() => _failure = ApiFailure('Could not load ZetraMail (${response.statusCode}).'));
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) {
+        setState(() => _failure = ApiFailure('Your session has expired. Please log in again.'));
+        return;
       }
+
+      final data = await supabase
+          .from('messages')
+          .select('id, from_app, subject, body, code, read_at, created_at')
+          .eq('user_id', userId)
+          .order('created_at', ascending: false)
+          .timeout(const Duration(seconds: 20));
+
+      final messages = List<Map<String, dynamic>>.from(data as List);
+      setState(() => _messages = messages);
+      final unread = messages.where((m) => m['read_at'] == null).length;
+      widget.onUnreadCountChanged(unread);
+    } on PostgrestException catch (e) {
+      setState(() => _failure = ApiFailure('Could not load ZetraMail (${e.code ?? 'error'}).'));
     } on SocketException {
       setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
+    } on TimeoutException {
+      setState(() => _failure = ApiFailure('The request timed out. Please try again.', isNetworkError: true));
     } catch (e) {
       setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
     } finally {
@@ -736,12 +815,12 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
   Future<void> _markRead(String id, int index) async {
     try {
-      final response = await http.post(
-        Uri.parse('$kApiBase/messages/$id/read'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      );
-      if (response.statusCode == 200) {
-        setState(() => _messages[index] = jsonDecode(response.body));
+      final result = await supabase
+          .rpc('mark_message_read', params: {'message_id': id})
+          .timeout(const Duration(seconds: 15));
+
+      if (result != null) {
+        setState(() => _messages[index] = Map<String, dynamic>.from(result as Map));
         final unread = _messages.where((m) => m['read_at'] == null).length;
         widget.onUnreadCountChanged(unread);
       }
