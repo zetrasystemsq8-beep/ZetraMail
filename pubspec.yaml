@@ -15,6 +15,7 @@ dependencies:
   http: ^1.2.0
   shared_preferences: ^2.2.2
   supabase_flutter: ^2.3.4   # Added for Supabase backend
+  url_launcher: ^6.3.1       # Added for Terms & Privacy link
 
 dev_dependencies:
   flutter_test:
