@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // =====================================================================
 // Supabase project configuration.
@@ -14,6 +15,8 @@ const String kSupabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 
 const Color kZetraGreen = Color(0xFF008751);
 const Color kZetraGreenDark = Color(0xFF00623B);
+
+const String kTermsAndPrivacyUrl = 'https://trusty-id-hub.lovable.app/';
 
 SupabaseClient get supabase => Supabase.instance.client;
 
@@ -915,6 +918,17 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _openTermsAndPrivacy() async {
+    final uri = Uri.parse(kTermsAndPrivacyUrl);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open Terms & Privacy Policy.')),
+      );
+    }
+  }
+
   void _copyToClipboard(String label, String value) {
     Clipboard.setData(ClipboardData(text: value));
     ScaffoldMessenger.of(context).showSnackBar(
@@ -979,6 +993,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Zetra ID'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.description_outlined),
+            tooltip: 'Terms & Privacy Policy',
+            onPressed: _openTermsAndPrivacy,
+          ),
           IconButton(icon: const Icon(Icons.logout), onPressed: _confirmLogout, tooltip: 'Log out'),
         ],
       ),
@@ -1026,6 +1045,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 _identityCard('Gender', _user!['gender'], Icons.people_outline, copyable: false),
               if (_user!['country'] != null)
                 _identityCard('Country', _user!['country'], Icons.public_outlined, copyable: false),
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton(
+                  onPressed: _openTermsAndPrivacy,
+                  child: Text(
+                    'Terms & Privacy Policy',
+                    style: TextStyle(color: Colors.grey.shade600, decoration: TextDecoration.underline),
+                  ),
+                ),
+              ),
             ],
           ],
         ),
@@ -1036,6 +1065,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
 /// ZetraMail inbox: verification codes and messages sent from
 /// other Zetra apps, from Zetra itself, and from other users.
+/// Also supports viewing messages you've sent.
 class MessagesScreen extends StatefulWidget {
   final void Function(int unreadCount) onUnreadCountChanged;
   const MessagesScreen({super.key, required this.onUnreadCountChanged});
@@ -1047,7 +1077,9 @@ class MessagesScreen extends StatefulWidget {
 class _MessagesScreenState extends State<MessagesScreen> {
   bool _isLoading = true;
   ApiFailure? _failure;
-  List<Map<String, dynamic>> _messages = [];
+  List<Map<String, dynamic>> _inbox = [];
+  List<Map<String, dynamic>> _sent = [];
+  int _tab = 0; // 0 = Inbox, 1 = Sent
 
   @override
   void initState() {
@@ -1068,16 +1100,29 @@ class _MessagesScreenState extends State<MessagesScreen> {
         return;
       }
 
-      final data = await supabase
+      final inboxData = await supabase
           .from('messages')
           .select('id, from_app, subject, body, code, read_at, created_at')
           .eq('user_id', userId)
           .order('created_at', ascending: false)
           .timeout(const Duration(seconds: 20));
 
-      final messages = List<Map<String, dynamic>>.from(data as List);
-      setState(() => _messages = messages);
-      final unread = messages.where((m) => m['read_at'] == null).length;
+      final sentData = await supabase
+          .from('messages')
+          .select('id, from_app, subject, body, code, read_at, created_at')
+          .eq('sender_id', userId)
+          .order('created_at', ascending: false)
+          .timeout(const Duration(seconds: 20));
+
+      final inbox = List<Map<String, dynamic>>.from(inboxData as List);
+      final sent = List<Map<String, dynamic>>.from(sentData as List);
+
+      setState(() {
+        _inbox = inbox;
+        _sent = sent;
+      });
+
+      final unread = inbox.where((m) => m['read_at'] == null).length;
       widget.onUnreadCountChanged(unread);
     } on PostgrestException catch (e) {
       setState(() => _failure = ApiFailure('Could not load ZetraMail (${e.code ?? 'error'}).'));
@@ -1092,15 +1137,19 @@ class _MessagesScreenState extends State<MessagesScreen> {
     }
   }
 
-  Future<void> _markRead(String id, int index) async {
+  Future<void> _markRead(String id) async {
     try {
       final result = await supabase
           .rpc('mark_message_read', params: {'message_id': id})
           .timeout(const Duration(seconds: 15));
 
       if (result != null) {
-        setState(() => _messages[index] = Map<String, dynamic>.from(result as Map));
-        final unread = _messages.where((m) => m['read_at'] == null).length;
+        final updated = Map<String, dynamic>.from(result as Map);
+        setState(() {
+          final index = _inbox.indexWhere((m) => m['id'] == id);
+          if (index != -1) _inbox[index] = updated;
+        });
+        final unread = _inbox.where((m) => m['read_at'] == null).length;
         widget.onUnreadCountChanged(unread);
       }
     } catch (_) {
@@ -1140,11 +1189,232 @@ class _MessagesScreenState extends State<MessagesScreen> {
     }
   }
 
+  void _openDetail(Map<String, dynamic> m, {required bool isSent}) {
+    if (!isSent && m['read_at'] == null) {
+      _markRead(m['id'] as String);
+    }
+    final code = m['code'] as String?;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                (m['from_app'] as String? ?? 'zetra').toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: kZetraGreenDark,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                m['subject'] as String? ?? '',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _timeAgo(m['created_at'] as String? ?? ''),
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                m['body'] as String? ?? '',
+                style: const TextStyle(fontSize: 15, height: 1.5),
+              ),
+              if (code != null) ...[
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: kZetraGreen.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        code,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          fontFamily: 'monospace',
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.copy_outlined, color: kZetraGreenDark),
+                      onPressed: () => _copyCode(code),
+                      tooltip: 'Copy code',
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _messageList(List<Map<String, dynamic>> messages, {required bool isSent}) {
+    if (messages.isEmpty) {
+      return ListView(
+        children: [
+          const SizedBox(height: 100),
+          Icon(
+            isSent ? Icons.outbox_outlined : Icons.mail_outline,
+            size: 56,
+            color: Colors.grey.shade400,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            isSent ? 'No sent mail yet' : 'No mail yet',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey.shade600, fontSize: 15),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            isSent
+                ? 'Messages you send will appear here.'
+                : 'Tap the search icon to find someone and send a message.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+          ),
+        ],
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: messages.length,
+      itemBuilder: (context, index) {
+        final m = messages[index];
+        final isUnread = !isSent && m['read_at'] == null;
+        final code = m['code'] as String?;
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: isUnread ? Border.all(color: kZetraGreen.withOpacity(0.4)) : null,
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _openDetail(m, isSent: isSent),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        if (isUnread)
+                          Container(
+                            width: 8,
+                            height: 8,
+                            margin: const EdgeInsets.only(right: 8),
+                            decoration: const BoxDecoration(color: kZetraGreen, shape: BoxShape.circle),
+                          ),
+                        Expanded(
+                          child: Text(
+                            (m['from_app'] as String? ?? 'zetra').toUpperCase(),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: kZetraGreenDark,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          _timeAgo(m['created_at'] as String? ?? ''),
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      m['subject'] as String? ?? '',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      m['body'] as String? ?? '',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
+                    ),
+                    if (code != null) ...[
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Icon(Icons.key_outlined, size: 16, color: Colors.grey.shade500),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Contains a code — tap to view',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('ZetraMail'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: ToggleButtons(
+              isSelected: [_tab == 0, _tab == 1],
+              onPressed: (i) => setState(() => _tab = i),
+              borderRadius: BorderRadius.circular(10),
+              selectedColor: Colors.white,
+              fillColor: Colors.white24,
+              color: Colors.white70,
+              constraints: BoxConstraints(
+                minWidth: (MediaQuery.of(context).size.width - 32) / 2 - 4,
+                minHeight: 36,
+              ),
+              children: const [Text('Inbox'), Text('Sent')],
+            ),
+          ),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
@@ -1179,127 +1449,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
                       Center(child: ElevatedButton(onPressed: _fetchMessages, child: const Text('Retry'))),
                     ],
                   )
-                : _messages.isEmpty
-                    ? ListView(
-                        children: [
-                          const SizedBox(height: 100),
-                          Icon(Icons.mail_outline, size: 56, color: Colors.grey.shade400),
-                          const SizedBox(height: 12),
-                          Text(
-                            'No mail yet',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey.shade600, fontSize: 15),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Tap the search icon to find someone and send a message.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
-                          ),
-                        ],
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, index) {
-                          final m = _messages[index];
-                          final isUnread = m['read_at'] == null;
-                          final code = m['code'] as String?;
-
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(14),
-                              border: isUnread ? Border.all(color: kZetraGreen.withOpacity(0.4)) : null,
-                              boxShadow: [
-                                BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-                              ],
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    if (isUnread)
-                                      Container(
-                                        width: 8,
-                                        height: 8,
-                                        margin: const EdgeInsets.only(right: 8),
-                                        decoration: const BoxDecoration(color: kZetraGreen, shape: BoxShape.circle),
-                                      ),
-                                    Expanded(
-                                      child: Text(
-                                        (m['from_app'] as String? ?? 'zetra').toUpperCase(),
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                          color: kZetraGreenDark,
-                                          letterSpacing: 0.5,
-                                        ),
-                                      ),
-                                    ),
-                                    Text(
-                                      _timeAgo(m['created_at'] as String? ?? ''),
-                                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  m['subject'] as String? ?? '',
-                                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  m['body'] as String? ?? '',
-                                  style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
-                                ),
-                                if (code != null) ...[
-                                  const SizedBox(height: 12),
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                        decoration: BoxDecoration(
-                                          color: kZetraGreen.withOpacity(0.08),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Text(
-                                          code,
-                                          style: const TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.bold,
-                                            fontFamily: 'monospace',
-                                            letterSpacing: 2,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      IconButton(
-                                        icon: const Icon(Icons.copy_outlined, size: 20, color: kZetraGreenDark),
-                                        onPressed: () => _copyCode(code),
-                                        tooltip: 'Copy code',
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                                if (isUnread) ...[
-                                  const SizedBox(height: 8),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton(
-                                      onPressed: () => _markRead(m['id'] as String, index),
-                                      child: const Text('Mark as read'),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          );
-                        },
-                      ),
+                : (_tab == 0 ? _messageList(_inbox, isSent: false) : _messageList(_sent, isSent: true)),
       ),
     );
   }
