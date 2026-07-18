@@ -8,8 +8,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // =====================================================================
 // Supabase project configuration.
 // Replace with your project's values from Project Settings -> API.
-// The anon key is safe to ship in a client app — it has no privileges
-// beyond what RLS policies grant it.
 // =====================================================================
 const String kSupabaseUrl = 'https://ssmwuihkafrulmvtiuam.supabase.co';
 const String kSupabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNzbXd1aWhrYWZydWxtdnRpdWFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4Mjk2NjAsImV4cCI6MjA5NjQwNTY2MH0.e1PxmDW77ZhbonS-Z96SWA_sPyVGedzpZNZbJQz7pQo';
@@ -18,6 +16,39 @@ const Color kZetraGreen = Color(0xFF008751);
 const Color kZetraGreenDark = Color(0xFF00623B);
 
 SupabaseClient get supabase => Supabase.instance.client;
+
+const List<String> kCountries = [
+  'Nigeria',
+  'Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Antigua and Barbuda',
+  'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas', 'Bahrain',
+  'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize', 'Benin', 'Bhutan', 'Bolivia',
+  'Bosnia and Herzegovina', 'Botswana', 'Brazil', 'Brunei', 'Bulgaria', 'Burkina Faso',
+  'Burundi', 'Cabo Verde', 'Cambodia', 'Cameroon', 'Canada', 'Central African Republic',
+  'Chad', 'Chile', 'China', 'Colombia', 'Comoros', 'Congo (Brazzaville)', 'Congo (Kinshasa)',
+  'Costa Rica', 'Croatia', 'Cuba', 'Cyprus', 'Czechia', 'Denmark', 'Djibouti', 'Dominica',
+  'Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador', 'Equatorial Guinea', 'Eritrea',
+  'Estonia', 'Eswatini', 'Ethiopia', 'Fiji', 'Finland', 'France', 'Gabon', 'Gambia',
+  'Georgia', 'Germany', 'Ghana', 'Greece', 'Grenada', 'Guatemala', 'Guinea', 'Guinea-Bissau',
+  'Guyana', 'Haiti', 'Honduras', 'Hungary', 'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq',
+  'Ireland', 'Israel', 'Italy', 'Ivory Coast', 'Jamaica', 'Japan', 'Jordan', 'Kazakhstan',
+  'Kenya', 'Kiribati', 'Kosovo', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia', 'Lebanon',
+  'Lesotho', 'Liberia', 'Libya', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Madagascar',
+  'Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Mauritania',
+  'Mauritius', 'Mexico', 'Micronesia', 'Moldova', 'Monaco', 'Mongolia', 'Montenegro',
+  'Morocco', 'Mozambique', 'Myanmar', 'Namibia', 'Nauru', 'Nepal', 'Netherlands',
+  'New Zealand', 'Nicaragua', 'Niger', 'North Korea', 'North Macedonia', 'Norway', 'Oman',
+  'Pakistan', 'Palau', 'Palestine', 'Panama', 'Papua New Guinea', 'Paraguay', 'Peru',
+  'Philippines', 'Poland', 'Portugal', 'Qatar', 'Romania', 'Russia', 'Rwanda',
+  'Saint Kitts and Nevis', 'Saint Lucia', 'Saint Vincent and the Grenadines', 'Samoa',
+  'San Marino', 'Sao Tome and Principe', 'Saudi Arabia', 'Senegal', 'Serbia', 'Seychelles',
+  'Sierra Leone', 'Singapore', 'Slovakia', 'Slovenia', 'Solomon Islands', 'Somalia',
+  'South Africa', 'South Korea', 'South Sudan', 'Spain', 'Sri Lanka', 'Sudan', 'Suriname',
+  'Sweden', 'Switzerland', 'Syria', 'Taiwan', 'Tajikistan', 'Tanzania', 'Thailand',
+  'Timor-Leste', 'Togo', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey',
+  'Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine', 'United Arab Emirates', 'United Kingdom',
+  'United States', 'Uruguay', 'Uzbekistan', 'Vanuatu', 'Vatican City', 'Venezuela',
+  'Vietnam', 'Yemen', 'Zambia', 'Zimbabwe',
+];
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -87,21 +118,66 @@ class ApiFailure {
   ApiFailure(this.message, {this.isNetworkError = false});
 }
 
+Widget buildErrorBanner(String message) {
+  return Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Colors.red.shade50,
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: Colors.red.shade200),
+    ),
+    child: Row(
+      children: [
+        Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(message, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget buildStepIndicator(int currentStep) {
+  Widget dot(bool active) => Container(
+        width: active ? 28 : 8,
+        height: 8,
+        decoration: BoxDecoration(
+          color: active ? kZetraGreen : Colors.grey.shade300,
+          borderRadius: BorderRadius.circular(4),
+        ),
+      );
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      dot(currentStep == 1),
+      const SizedBox(width: 6),
+      dot(currentStep == 2),
+    ],
+  );
+}
+
+String formatDisplayDate(String isoDate) {
+  final parts = isoDate.split('-');
+  if (parts.length != 3) return isoDate;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final year = parts[0];
+  final month = int.tryParse(parts[1]) ?? 1;
+  final day = int.tryParse(parts[2]) ?? 1;
+  return '$day ${months[month - 1]} $year';
+}
+
 // =====================================================================
 // AuthGate
 //
-// On cold start, trusts Supabase's own persisted session (it restores
-// this itself before Supabase.initialize() returns) to decide whether
-// to show AuthScreen or RootScreen — no WelcomeScreen on a returning
-// user, same as the original SharedPreferences-token check.
-//
-// After a fresh sign-up/sign-in, the session becomes non-null
-// immediately, but _authenticated is intentionally NOT flipped by the
-// auth-state stream at that moment — AuthScreen pushes WelcomeScreen
-// first, and only calls onAuthenticated() when the user taps
-// "Continue", exactly matching the original UX. The stream is used
-// only to catch involuntary sign-outs (expired/revoked session),
-// which immediately bounce the user back to AuthScreen.
+// On cold start, trusts Supabase's own persisted session to decide
+// whether to show AuthEntryScreen or RootScreen. After a fresh
+// sign-up/sign-in, _authenticated is intentionally NOT flipped by the
+// auth-state stream immediately — WelcomeScreen is shown first, and
+// only calling onAuthenticated() (via its "Continue" button) switches
+// to RootScreen. The stream is used only to catch involuntary
+// sign-outs (expired/revoked session), which bounce the user back to
+// AuthEntryScreen.
 // =====================================================================
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -143,65 +219,44 @@ class _AuthGateState extends State<AuthGate> {
   @override
   Widget build(BuildContext context) {
     if (!_authenticated) {
-      return AuthScreen(onAuthenticated: _onAuthenticated);
+      return AuthEntryScreen(onAuthenticated: _onAuthenticated);
     }
     return RootScreen(onLoggedOut: _onLoggedOut);
   }
 }
 
-class AuthScreen extends StatefulWidget {
+// =====================================================================
+// AuthEntryScreen — login with username or Zetra ID, or go to signup.
+// =====================================================================
+class AuthEntryScreen extends StatefulWidget {
   final VoidCallback onAuthenticated;
-  const AuthScreen({super.key, required this.onAuthenticated});
+  const AuthEntryScreen({super.key, required this.onAuthenticated});
 
   @override
-  State<AuthScreen> createState() => _AuthScreenState();
+  State<AuthEntryScreen> createState() => _AuthEntryScreenState();
 }
 
-class _AuthScreenState extends State<AuthScreen> {
-  bool _isRegisterMode = true;
-  bool _isLoading = false;
-  bool _obscurePassword = true;
-  String? _errorMessage;
-
-  final _usernameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _passwordController = TextEditingController();
+class _AuthEntryScreenState extends State<AuthEntryScreen> {
   final _identifierController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _obscurePassword = true;
+  bool _isLoading = false;
+  String? _errorMessage;
 
   @override
   void dispose() {
-    _usernameController.dispose();
-    _emailController.dispose();
-    _phoneController.dispose();
-    _passwordController.dispose();
     _identifierController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
-  String? _validate() {
-    if (_isRegisterMode) {
-      if (_usernameController.text.trim().length < 3) {
-        return 'Username must be at least 3 characters.';
-      }
-      if (!_emailController.text.contains('@')) {
-        return 'Enter a valid email address.';
-      }
-    } else {
-      if (_identifierController.text.trim().isEmpty) {
-        return 'Enter your Zetra ID, username, ZetraMail, phone, or email.';
-      }
+  Future<void> _login() async {
+    if (_identifierController.text.trim().isEmpty) {
+      setState(() => _errorMessage = 'Enter your username or Zetra ID.');
+      return;
     }
     if (_passwordController.text.length < 8) {
-      return 'Password must be at least 8 characters.';
-    }
-    return null;
-  }
-
-  Future<void> _submit() async {
-    final validationError = _validate();
-    if (validationError != null) {
-      setState(() => _errorMessage = validationError);
+      setState(() => _errorMessage = 'Password must be at least 8 characters.');
       return;
     }
 
@@ -211,17 +266,35 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
-      if (_isRegisterMode) {
-        await _submitRegister();
-      } else {
-        await _submitLogin();
+      final identifier = _identifierController.text.trim();
+      final resolvedEmail = await supabase
+          .rpc('resolve_login_email', params: {'p_identifier': identifier})
+          .timeout(const Duration(seconds: 20)) as String?;
+
+      if (resolvedEmail == null) {
+        setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
+        return;
       }
-    } on AuthException catch (e) {
-      setState(() {
-        _errorMessage = _isRegisterMode
-            ? (e.message.isNotEmpty ? e.message : 'Something went wrong. Please try again.')
-            : 'Incorrect login credentials. Please check and try again.';
-      });
+
+      final response = await supabase.auth
+          .signInWithPassword(email: resolvedEmail, password: _passwordController.text)
+          .timeout(const Duration(seconds: 20));
+
+      if (response.session == null) {
+        setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
+        return;
+      }
+
+      final username = (response.user?.userMetadata?['username'] as String?) ?? '';
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => WelcomeScreen(username: username, onContinue: widget.onAuthenticated),
+        ),
+      );
+    } on AuthException catch (_) {
+      setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
     } on PostgrestException catch (_) {
       setState(() => _errorMessage = 'Something went wrong. Please try again.');
     } on SocketException {
@@ -235,94 +308,9 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  Future<void> _submitRegister() async {
-    final username = _usernameController.text.trim();
-    final email = _emailController.text.trim();
-    final phone = _phoneController.text.trim();
-    final password = _passwordController.text;
-
-    final availabilityRaw = await supabase
-        .rpc('check_registration_availability', params: {
-          'p_username': username,
-          'p_email': email,
-          'p_phone': phone.isEmpty ? null : phone,
-        })
-        .timeout(const Duration(seconds: 20));
-
-    final availability = Map<String, dynamic>.from(availabilityRaw as Map);
-
-    if (availability['username_taken'] == true) {
-      setState(() => _errorMessage = 'That username is already taken.');
-      return;
-    }
-    if (availability['email_taken'] == true) {
-      setState(() => _errorMessage = 'That email is already registered.');
-      return;
-    }
-    if (availability['phone_taken'] == true) {
-      setState(() => _errorMessage = 'That phone number is already registered.');
-      return;
-    }
-
-    final response = await supabase.auth
-        .signUp(
-          email: email,
-          password: password,
-          data: {
-            'username': username,
-            if (phone.isNotEmpty) 'phone': phone,
-          },
-        )
-        .timeout(const Duration(seconds: 20));
-
-    if (response.session == null) {
-      setState(() => _errorMessage = 'Check your email to confirm your account, then log in.');
-      return;
-    }
-
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => WelcomeScreen(
-          username: username,
-          onContinue: widget.onAuthenticated,
-        ),
-      ),
-    );
-  }
-
-  Future<void> _submitLogin() async {
-    final identifier = _identifierController.text.trim();
-    final password = _passwordController.text;
-
-    final resolvedEmail = await supabase
-        .rpc('resolve_login_email', params: {'p_identifier': identifier})
-        .timeout(const Duration(seconds: 20)) as String?;
-
-    if (resolvedEmail == null) {
-      setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
-      return;
-    }
-
-    final response = await supabase.auth
-        .signInWithPassword(email: resolvedEmail, password: password)
-        .timeout(const Duration(seconds: 20));
-
-    if (response.session == null) {
-      setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
-      return;
-    }
-
-    final username = (response.user?.userMetadata?['username'] as String?) ?? '';
-
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => WelcomeScreen(
-          username: username,
-          onContinue: widget.onAuthenticated,
-        ),
-      ),
+  void _goToRegister() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => RegisterScreenOne(onAuthenticated: widget.onAuthenticated)),
     );
   }
 
@@ -335,68 +323,35 @@ class _AuthScreenState extends State<AuthScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 32),
+              const SizedBox(height: 48),
               Center(
                 child: Container(
                   width: 84,
                   height: 84,
-                  decoration: BoxDecoration(
-                    color: kZetraGreen,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
+                  decoration: BoxDecoration(color: kZetraGreen, borderRadius: BorderRadius.circular(20)),
                   child: const Icon(Icons.badge_outlined, color: Colors.white, size: 44),
                 ),
               ),
               const SizedBox(height: 20),
-              Text(
-                _isRegisterMode ? 'Create your Zetra ID' : 'Welcome back',
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+              const Text(
+                'Welcome back',
+                style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
               Text(
-                _isRegisterMode
-                    ? 'One identity for every Zetra app'
-                    : 'Log in with your Zetra ID, username, ZetraMail, phone, or email',
+                'Log in with your username or Zetra ID',
                 style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 32),
-              if (_isRegisterMode) ...[
-                TextField(
-                  controller: _usernameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Username',
-                    prefixIcon: Icon(Icons.person_outline),
-                  ),
+              TextField(
+                controller: _identifierController,
+                decoration: const InputDecoration(
+                  labelText: 'Username or Zetra ID',
+                  prefixIcon: Icon(Icons.person_outline),
                 ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: 'Email',
-                    prefixIcon: Icon(Icons.mail_outline),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: _phoneController,
-                  keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
-                    labelText: 'Phone (optional)',
-                    prefixIcon: Icon(Icons.phone_outlined),
-                  ),
-                ),
-              ] else ...[
-                TextField(
-                  controller: _identifierController,
-                  decoration: const InputDecoration(
-                    labelText: 'Zetra ID / username / ZetraMail / phone / email',
-                    prefixIcon: Icon(Icons.person_outline),
-                  ),
-                ),
-              ],
+              ),
               const SizedBox(height: 14),
               TextField(
                 controller: _passwordController,
@@ -412,52 +367,366 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
               const SizedBox(height: 24),
               if (_errorMessage != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.red.shade200),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _errorMessage!,
-                          style: TextStyle(color: Colors.red.shade700, fontSize: 13),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                buildErrorBanner(_errorMessage!),
                 const SizedBox(height: 16),
               ],
               ElevatedButton(
-                onPressed: _isLoading ? null : _submit,
+                onPressed: _isLoading ? null : _login,
                 child: _isLoading
                     ? const SizedBox(
                         height: 22,
                         width: 22,
                         child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
                       )
-                    : Text(_isRegisterMode ? 'Create Zetra ID' : 'Log In'),
+                    : const Text('Log In'),
               ),
               const SizedBox(height: 12),
               TextButton(
-                onPressed: _isLoading
-                    ? null
-                    : () => setState(() {
-                          _isRegisterMode = !_isRegisterMode;
-                          _errorMessage = null;
-                        }),
-                child: Text(
-                  _isRegisterMode
-                      ? 'Already have a Zetra ID? Log in'
-                      : "Don't have a Zetra ID? Create one",
-                  style: const TextStyle(color: kZetraGreenDark, fontWeight: FontWeight.w600),
+                onPressed: _isLoading ? null : _goToRegister,
+                child: const Text(
+                  "Don't have a Zetra ID? Create one",
+                  style: TextStyle(color: kZetraGreenDark, fontWeight: FontWeight.w600),
                 ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// RegisterScreenOne — full name, username, password, confirm password.
+// =====================================================================
+class RegisterScreenOne extends StatefulWidget {
+  final VoidCallback onAuthenticated;
+  const RegisterScreenOne({super.key, required this.onAuthenticated});
+
+  @override
+  State<RegisterScreenOne> createState() => _RegisterScreenOneState();
+}
+
+class _RegisterScreenOneState extends State<RegisterScreenOne> {
+  final _fullNameController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  bool _obscurePassword = true;
+  bool _obscureConfirm = true;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _fullNameController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  String? _validate() {
+    if (_fullNameController.text.trim().isEmpty) {
+      return 'Enter your full name.';
+    }
+    if (_usernameController.text.trim().length < 3) {
+      return 'Username must be at least 3 characters.';
+    }
+    if (_passwordController.text.length < 8) {
+      return 'Password must be at least 8 characters.';
+    }
+    if (_passwordController.text != _confirmPasswordController.text) {
+      return 'Passwords do not match.';
+    }
+    return null;
+  }
+
+  void _continue() {
+    final error = _validate();
+    if (error != null) {
+      setState(() => _errorMessage = error);
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => RegisterScreenTwo(
+          fullName: _fullNameController.text.trim(),
+          username: _usernameController.text.trim(),
+          password: _passwordController.text,
+          onAuthenticated: widget.onAuthenticated,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create your Zetra ID')),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              buildStepIndicator(1),
+              const SizedBox(height: 24),
+              const Text('Tell us about you', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text('Step 1 of 2', style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+              const SizedBox(height: 28),
+              TextField(
+                controller: _fullNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Full Name',
+                  prefixIcon: Icon(Icons.badge_outlined),
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _usernameController,
+                decoration: const InputDecoration(
+                  labelText: 'Username',
+                  prefixIcon: Icon(Icons.person_outline),
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _confirmPasswordController,
+                obscureText: _obscureConfirm,
+                decoration: InputDecoration(
+                  labelText: 'Confirm Password',
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    icon: Icon(_obscureConfirm ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              if (_errorMessage != null) ...[
+                buildErrorBanner(_errorMessage!),
+                const SizedBox(height: 16),
+              ],
+              ElevatedButton(onPressed: _continue, child: const Text('Continue')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// RegisterScreenTwo — date of birth, gender, country, then creation.
+// =====================================================================
+class RegisterScreenTwo extends StatefulWidget {
+  final String fullName;
+  final String username;
+  final String password;
+  final VoidCallback onAuthenticated;
+  const RegisterScreenTwo({
+    super.key,
+    required this.fullName,
+    required this.username,
+    required this.password,
+    required this.onAuthenticated,
+  });
+
+  @override
+  State<RegisterScreenTwo> createState() => _RegisterScreenTwoState();
+}
+
+class _RegisterScreenTwoState extends State<RegisterScreenTwo> {
+  DateTime? _dateOfBirth;
+  String? _gender;
+  String? _country;
+  bool _isLoading = false;
+  String? _errorMessage;
+
+  static const List<String> _genderOptions = ['Male', 'Female', 'Prefer not to say'];
+
+  Future<void> _pickDateOfBirth() async {
+    final now = DateTime.now();
+    final initial = _dateOfBirth ?? DateTime(now.year - 18, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year - 100),
+      lastDate: DateTime(now.year - 13, now.month, now.day),
+      helpText: 'Select date of birth',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: Theme.of(context).colorScheme.copyWith(primary: kZetraGreen),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) setState(() => _dateOfBirth = picked);
+  }
+
+  String _formatPickedDate(DateTime d) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${d.day} ${months[d.month - 1]} ${d.year}';
+  }
+
+  Future<void> _createAccount() async {
+    if (_dateOfBirth == null) {
+      setState(() => _errorMessage = 'Please select your date of birth.');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final internalEmail = await supabase
+          .rpc('internal_auth_email', params: {'p_username': widget.username})
+          .timeout(const Duration(seconds: 15)) as String;
+
+      final availabilityRaw = await supabase
+          .rpc('check_registration_availability', params: {
+            'p_username': widget.username,
+            'p_email': internalEmail,
+            'p_phone': null,
+          })
+          .timeout(const Duration(seconds: 20));
+      final availability = Map<String, dynamic>.from(availabilityRaw as Map);
+
+      if (availability['username_taken'] == true) {
+        setState(() => _errorMessage = 'That username is already taken.');
+        return;
+      }
+
+      final dob =
+          '${_dateOfBirth!.year.toString().padLeft(4, '0')}-${_dateOfBirth!.month.toString().padLeft(2, '0')}-${_dateOfBirth!.day.toString().padLeft(2, '0')}';
+
+      final response = await supabase.auth
+          .signUp(
+            email: internalEmail,
+            password: widget.password,
+            data: {
+              'username': widget.username,
+              'full_name': widget.fullName,
+              'date_of_birth': dob,
+              if (_gender != null) 'gender': _gender,
+              if (_country != null) 'country': _country,
+            },
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (response.session == null) {
+        setState(() => _errorMessage = 'Something went wrong creating your account. Please try again.');
+        return;
+      }
+
+      if (!mounted) return;
+      await Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => WelcomeScreen(username: widget.username, onContinue: widget.onAuthenticated),
+        ),
+        (route) => route.isFirst,
+      );
+    } on AuthException catch (e) {
+      setState(() => _errorMessage = e.message.isNotEmpty ? e.message : 'Something went wrong. Please try again.');
+    } on PostgrestException catch (_) {
+      setState(() => _errorMessage = 'Something went wrong. Please try again.');
+    } on SocketException {
+      setState(() => _errorMessage = 'No internet connection. Check your network and try again.');
+    } on TimeoutException {
+      setState(() => _errorMessage = 'Could not reach the server. Please try again.');
+    } catch (e) {
+      setState(() => _errorMessage = 'Something went wrong. Please try again.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create your Zetra ID')),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              buildStepIndicator(2),
+              const SizedBox(height: 24),
+              const Text('A few more details', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text('Step 2 of 2', style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+              const SizedBox(height: 28),
+              InkWell(
+                onTap: _pickDateOfBirth,
+                borderRadius: BorderRadius.circular(12),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Date of Birth',
+                    prefixIcon: Icon(Icons.cake_outlined),
+                  ),
+                  child: Text(
+                    _dateOfBirth == null ? 'Select date' : _formatPickedDate(_dateOfBirth!),
+                    style: TextStyle(
+                      color: _dateOfBirth == null ? Colors.grey.shade600 : Colors.black87,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              DropdownButtonFormField<String>(
+                value: _gender,
+                decoration: const InputDecoration(
+                  labelText: 'Gender (optional)',
+                  prefixIcon: Icon(Icons.people_outline),
+                ),
+                items: _genderOptions.map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
+                onChanged: (v) => setState(() => _gender = v),
+              ),
+              const SizedBox(height: 14),
+              DropdownButtonFormField<String>(
+                value: _country,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Country (optional)',
+                  prefixIcon: Icon(Icons.public_outlined),
+                ),
+                items: kCountries.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                onChanged: (v) => setState(() => _country = v),
+              ),
+              const SizedBox(height: 20),
+              if (_errorMessage != null) ...[
+                buildErrorBanner(_errorMessage!),
+                const SizedBox(height: 16),
+              ],
+              ElevatedButton(
+                onPressed: _isLoading ? null : _createAccount,
+                child: _isLoading
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                      )
+                    : const Text('Create Zetra ID'),
               ),
             ],
           ),
@@ -597,7 +866,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final data = await supabase
           .from('profiles')
-          .select('zetra_id, username, zetramail, email, phone')
+          .select('zetra_id, username, zetramail, full_name, date_of_birth, gender, country')
           .eq('id', userId)
           .single()
           .timeout(const Duration(seconds: 20));
@@ -658,7 +927,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _identityCard(String label, String value, IconData icon) {
+  Widget _identityCard(String label, String value, IconData icon, {bool copyable = true}) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -693,11 +962,12 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.copy_outlined, size: 20, color: kZetraGreenDark),
-            onPressed: () => _copyToClipboard(label, value),
-            tooltip: 'Copy $label',
-          ),
+          if (copyable)
+            IconButton(
+              icon: const Icon(Icons.copy_outlined, size: 20, color: kZetraGreenDark),
+              onPressed: () => _copyToClipboard(label, value),
+              tooltip: 'Copy $label',
+            ),
         ],
       ),
     );
@@ -744,9 +1014,18 @@ class _HomeScreenState extends State<HomeScreen> {
               _identityCard('Zetra ID', _user!['zetra_id'] ?? '-', Icons.badge_outlined),
               _identityCard('Username', _user!['username'] ?? '-', Icons.person_outline),
               _identityCard('ZetraMail', _user!['zetramail'] ?? '-', Icons.mail_outline),
-              _identityCard('Email', _user!['email'] ?? '-', Icons.alternate_email),
-              if (_user!['phone'] != null)
-                _identityCard('Phone', _user!['phone'], Icons.phone_outlined),
+              _identityCard('Full Name', _user!['full_name'] ?? '-', Icons.badge, copyable: false),
+              if (_user!['date_of_birth'] != null)
+                _identityCard(
+                  'Date of Birth',
+                  formatDisplayDate(_user!['date_of_birth'] as String),
+                  Icons.cake_outlined,
+                  copyable: false,
+                ),
+              if (_user!['gender'] != null)
+                _identityCard('Gender', _user!['gender'], Icons.people_outline, copyable: false),
+              if (_user!['country'] != null)
+                _identityCard('Country', _user!['country'], Icons.public_outlined, copyable: false),
             ],
           ],
         ),
@@ -756,7 +1035,7 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 /// ZetraMail inbox: verification codes and messages sent from
-/// other Zetra apps and from Zetra itself.
+/// other Zetra apps, from Zetra itself, and from other users.
 class MessagesScreen extends StatefulWidget {
   final void Function(int unreadCount) onUnreadCountChanged;
   const MessagesScreen({super.key, required this.onUnreadCountChanged});
@@ -852,10 +1131,34 @@ class _MessagesScreenState extends State<MessagesScreen> {
     return '${diff.inDays}d ago';
   }
 
+  void _openSearch() async {
+    final sent = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const SearchZetraMailScreen()),
+    );
+    if (sent == true) {
+      _fetchMessages();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('ZetraMail')),
+      appBar: AppBar(
+        title: const Text('ZetraMail'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Find a ZetraMail account',
+            onPressed: _openSearch,
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: kZetraGreen,
+        onPressed: _openSearch,
+        tooltip: 'New message',
+        child: const Icon(Icons.edit_outlined, color: Colors.white),
+      ),
       body: RefreshIndicator(
         color: kZetraGreen,
         onRefresh: _fetchMessages,
@@ -889,7 +1192,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Verification codes from other Zetra apps will appear here.',
+                            'Tap the search icon to find someone and send a message.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
                           ),
@@ -997,6 +1300,308 @@ class _MessagesScreenState extends State<MessagesScreen> {
                           );
                         },
                       ),
+      ),
+    );
+  }
+}
+
+/// Search other Zetra ID holders by username or ZetraMail address,
+/// then tap a result to compose a message to them.
+class SearchZetraMailScreen extends StatefulWidget {
+  const SearchZetraMailScreen({super.key});
+
+  @override
+  State<SearchZetraMailScreen> createState() => _SearchZetraMailScreenState();
+}
+
+class _SearchZetraMailScreenState extends State<SearchZetraMailScreen> {
+  final _queryController = TextEditingController();
+  bool _isLoading = false;
+  ApiFailure? _failure;
+  List<Map<String, dynamic>> _results = [];
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _queryController.dispose();
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () => _search(value));
+  }
+
+  Future<void> _search(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setState(() {
+        _results = [];
+        _failure = null;
+        _isLoading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _failure = null;
+    });
+
+    try {
+      final data = await supabase
+          .rpc('search_zetramail', params: {'p_query': trimmed})
+          .timeout(const Duration(seconds: 15));
+      setState(() => _results = List<Map<String, dynamic>>.from(data as List));
+    } on PostgrestException catch (_) {
+      setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
+    } on SocketException {
+      setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
+    } on TimeoutException {
+      setState(() => _failure = ApiFailure('The request timed out. Please try again.', isNetworkError: true));
+    } catch (e) {
+      setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _openCompose(Map<String, dynamic> account) async {
+    final sent = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ComposeMailScreen(
+          recipientZetraMail: account['zetramail'] as String,
+          recipientUsername: account['username'] as String,
+        ),
+      ),
+    );
+    if (sent == true && mounted) {
+      Navigator.of(context).pop(true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Find a ZetraMail account')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _queryController,
+              autofocus: true,
+              onChanged: _onQueryChanged,
+              decoration: const InputDecoration(
+                labelText: 'Search by username or ZetraMail',
+                prefixIcon: Icon(Icons.search),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator(color: kZetraGreen))
+                  : _failure != null
+                      ? Center(
+                          child: Text(
+                            _failure!.message,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
+                        )
+                      : _results.isEmpty
+                          ? Center(
+                              child: Text(
+                                _queryController.text.trim().length < 2
+                                    ? 'Type at least 2 characters to search.'
+                                    : 'No matching ZetraMail account found.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.grey.shade600),
+                              ),
+                            )
+                          : ListView.separated(
+                              itemCount: _results.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final r = _results[index];
+                                final displayName = (r['full_name'] as String?) ?? (r['username'] as String? ?? '');
+                                final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
+
+                                return Container(
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(14),
+                                    boxShadow: [
+                                      BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+                                    ],
+                                  ),
+                                  child: ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: CircleAvatar(
+                                      backgroundColor: kZetraGreen.withOpacity(0.1),
+                                      child: Text(
+                                        initial,
+                                        style: const TextStyle(color: kZetraGreenDark, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                    title: Text(displayName),
+                                    subtitle: Text(r['zetramail'] as String? ?? ''),
+                                    trailing: const Icon(Icons.chevron_right, color: kZetraGreenDark),
+                                    onTap: () => _openCompose(r),
+                                  ),
+                                );
+                              },
+                            ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Compose and send a ZetraMail message to another Zetra ID holder.
+class ComposeMailScreen extends StatefulWidget {
+  final String recipientZetraMail;
+  final String recipientUsername;
+  const ComposeMailScreen({
+    super.key,
+    required this.recipientZetraMail,
+    required this.recipientUsername,
+  });
+
+  @override
+  State<ComposeMailScreen> createState() => _ComposeMailScreenState();
+}
+
+class _ComposeMailScreenState extends State<ComposeMailScreen> {
+  final _subjectController = TextEditingController();
+  final _bodyController = TextEditingController();
+  bool _isSending = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _subjectController.dispose();
+    _bodyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final subject = _subjectController.text.trim();
+    final body = _bodyController.text.trim();
+
+    if (subject.isEmpty) {
+      setState(() => _errorMessage = 'Enter a subject.');
+      return;
+    }
+    if (body.isEmpty) {
+      setState(() => _errorMessage = 'Enter a message.');
+      return;
+    }
+
+    setState(() {
+      _isSending = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await supabase.rpc('send_zetramail', params: {
+        'p_recipient_zetramail': widget.recipientZetraMail,
+        'p_subject': subject,
+        'p_body': body,
+      }).timeout(const Duration(seconds: 20));
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Sent to ${widget.recipientUsername}'),
+          backgroundColor: kZetraGreenDark,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      Navigator.of(context).pop(true);
+    } on PostgrestException catch (e) {
+      setState(() => _errorMessage = e.message.isNotEmpty ? e.message : 'Could not send this message. Please try again.');
+    } on SocketException {
+      setState(() => _errorMessage = 'No internet connection. Check your network and try again.');
+    } on TimeoutException {
+      setState(() => _errorMessage = 'Could not reach the server. Please try again.');
+    } catch (e) {
+      setState(() => _errorMessage = 'Something went wrong. Please try again.');
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('New Message')),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: kZetraGreen.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.person, color: kZetraGreenDark),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(widget.recipientUsername, style: const TextStyle(fontWeight: FontWeight.w600)),
+                          Text(widget.recipientZetraMail, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                controller: _subjectController,
+                decoration: const InputDecoration(labelText: 'Subject', prefixIcon: Icon(Icons.subject)),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _bodyController,
+                maxLines: 6,
+                decoration: const InputDecoration(
+                  labelText: 'Message',
+                  alignLabelWithHint: true,
+                  prefixIcon: Icon(Icons.message_outlined),
+                ),
+              ),
+              const SizedBox(height: 20),
+              if (_errorMessage != null) ...[
+                buildErrorBanner(_errorMessage!),
+                const SizedBox(height: 16),
+              ],
+              ElevatedButton(
+                onPressed: _isSending ? null : _send,
+                child: _isSending
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                      )
+                    : const Text('Send'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
