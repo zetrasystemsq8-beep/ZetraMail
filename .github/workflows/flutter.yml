@@ -1,5 +1,4 @@
 name: Build ZetraMail APK
-
 on:
   push:
     branches: [ main ]
@@ -7,7 +6,7 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -26,8 +25,8 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.4'
-          channel: 'stable'
+          flutter-version: "3.35.4"
+          channel: stable
 
       - name: Fix app icon
         run: |
@@ -49,10 +48,22 @@ jobs:
       - name: Build APK
         run: flutter build apk --release --no-tree-shake-icons
 
-      - name: Upload APK
+      # Upload Artifact
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ZetraMail-release
           path: build/app/outputs/flutter-apk/app-release.apk
-          retention-days: 1
           overwrite: true
+          retention-days: 1
+
+      # Create/Update GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: ZetraMail Latest Build
+          files: build/app/outputs/flutter-apk/app-release.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
