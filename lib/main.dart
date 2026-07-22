@@ -1,1757 +1,2256 @@
-import 'dart:async';
-import 'dart:io';
+// lib/main.dart
+//
+// NaijaLearn — CBT Practice App
+// Material 3.
+//
+// Question content lives in per-subject files (questions_*.dart).
+// Gamification (XP, streak, badges, leaderboard, daily challenge, mock
+// exams, analytics) lives in app_enhancements.dart and plugs in via
+// AppProvider, without replacing any of the CBT screens below.
+//
+// Authentication: NaijaLearn is a client of the existing Zetra ecosystem.
+// Users are NOT created here — they must already have a Zetra account.
+// The user types their ZetraMail address (e.g. user@zetramail.ng). We
+// resolve that to the internal auth_email via the resolve_login_email(...)
+// Supabase RPC, and Supabase Auth OTP is sent/verified using ONLY that
+// internal auth_email — the user never sees or types it. If the RPC
+// returns null/empty, we show "This ZetraMail account does not exist."
+// and never call signInWithOtp.
+//
+// Note on backgrounding: Flutter does NOT reload the app or reset widget
+// state when the user switches to another app (ZetraMail) and returns,
+// as long as the OS hasn't killed the process. The entered email, the
+// OTP digits, and the resend-timer all persist automatically. The
+// WidgetsBindingObserver on VerifyOtpScreen below simply logs lifecycle
+// transitions and deliberately does NOT touch any state on resume —
+// it exists so future changes don't accidentally introduce a reset.
 
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-// =====================================================================
-// Supabase project configuration.
-// Replace with your project's values from Project Settings -> API.
-// =====================================================================
-const String kSupabaseUrl = 'https://ssmwuihkafrulmvtiuam.supabase.co';
-const String kSupabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNzbXd1aWhrYWZydWxtdnRpdWFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4Mjk2NjAsImV4cCI6MjA5NjQwNTY2MH0.e1PxmDW77ZhbonS-Z96SWA_sPyVGedzpZNZbJQz7pQo';
+import 'app_enhancements.dart';
 
-const Color kZetraGreen = Color(0xFF008751);
-const Color kZetraGreenDark = Color(0xFF00623B);
-
-const String kTermsAndPrivacyUrl = 'https://trusty-id-hub.lovable.app/';
-
-SupabaseClient get supabase => Supabase.instance.client;
-
-const List<String> kCountries = [
-  'Nigeria',
-  'Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Antigua and Barbuda',
-  'Argentina', 'Armenia', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas', 'Bahrain',
-  'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize', 'Benin', 'Bhutan', 'Bolivia',
-  'Bosnia and Herzegovina', 'Botswana', 'Brazil', 'Brunei', 'Bulgaria', 'Burkina Faso',
-  'Burundi', 'Cabo Verde', 'Cambodia', 'Cameroon', 'Canada', 'Central African Republic',
-  'Chad', 'Chile', 'China', 'Colombia', 'Comoros', 'Congo (Brazzaville)', 'Congo (Kinshasa)',
-  'Costa Rica', 'Croatia', 'Cuba', 'Cyprus', 'Czechia', 'Denmark', 'Djibouti', 'Dominica',
-  'Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador', 'Equatorial Guinea', 'Eritrea',
-  'Estonia', 'Eswatini', 'Ethiopia', 'Fiji', 'Finland', 'France', 'Gabon', 'Gambia',
-  'Georgia', 'Germany', 'Ghana', 'Greece', 'Grenada', 'Guatemala', 'Guinea', 'Guinea-Bissau',
-  'Guyana', 'Haiti', 'Honduras', 'Hungary', 'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq',
-  'Ireland', 'Israel', 'Italy', 'Ivory Coast', 'Jamaica', 'Japan', 'Jordan', 'Kazakhstan',
-  'Kenya', 'Kiribati', 'Kosovo', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia', 'Lebanon',
-  'Lesotho', 'Liberia', 'Libya', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Madagascar',
-  'Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Mauritania',
-  'Mauritius', 'Mexico', 'Micronesia', 'Moldova', 'Monaco', 'Mongolia', 'Montenegro',
-  'Morocco', 'Mozambique', 'Myanmar', 'Namibia', 'Nauru', 'Nepal', 'Netherlands',
-  'New Zealand', 'Nicaragua', 'Niger', 'North Korea', 'North Macedonia', 'Norway', 'Oman',
-  'Pakistan', 'Palau', 'Palestine', 'Panama', 'Papua New Guinea', 'Paraguay', 'Peru',
-  'Philippines', 'Poland', 'Portugal', 'Qatar', 'Romania', 'Russia', 'Rwanda',
-  'Saint Kitts and Nevis', 'Saint Lucia', 'Saint Vincent and the Grenadines', 'Samoa',
-  'San Marino', 'Sao Tome and Principe', 'Saudi Arabia', 'Senegal', 'Serbia', 'Seychelles',
-  'Sierra Leone', 'Singapore', 'Slovakia', 'Slovenia', 'Solomon Islands', 'Somalia',
-  'South Africa', 'South Korea', 'South Sudan', 'Spain', 'Sri Lanka', 'Sudan', 'Suriname',
-  'Sweden', 'Switzerland', 'Syria', 'Taiwan', 'Tajikistan', 'Tanzania', 'Thailand',
-  'Timor-Leste', 'Togo', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey',
-  'Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine', 'United Arab Emirates', 'United Kingdom',
-  'United States', 'Uruguay', 'Uzbekistan', 'Vanuatu', 'Vatican City', 'Venezuela',
-  'Vietnam', 'Yemen', 'Zambia', 'Zimbabwe',
-];
+import 'questions_english.dart';
+import 'questions_accounting.dart';
+import 'questions_arabic.dart';
+import 'questions_biology.dart';
+import 'questions_commerce.dart';
+import 'questions_crs.dart';
+import 'questions_economics.dart';
+import 'questions_geography.dart';
+import 'questions_government.dart';
+import 'questions_irs.dart';
+import 'questions_literature.dart';
+import 'questions_mathematics.dart';
+import 'questions_physics.dart';
+import 'questions_chemistry.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await dotenv.load(fileName: '.env');
+
   await Supabase.initialize(
-    url: kSupabaseUrl,
-    anonKey: kSupabaseAnonKey,
+    url: dotenv.env['SUPABASE_URL']!,
+    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
-  runApp(const ZetraIdApp());
+
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => AppProvider(),
+      child: const NaijaLearnApp(),
+    ),
+  );
 }
 
-class ZetraIdApp extends StatelessWidget {
-  const ZetraIdApp({super.key});
+/// =========================================================================
+/// AUTHENTICATION (Zetra ecosystem client — RPC-backed OTP login)
+/// =========================================================================
+
+/// Minimal read model of a `profiles` row, used to populate the app after
+/// sign-in (username, zetramail, avatar, verified badge, etc).
+class ZetraProfile {
+  final String id;
+  final String zetramail;
+  final String authEmail;
+  final String username;
+  final bool verified;
+  final String? avatarUrl;
+
+  ZetraProfile({
+    required this.id,
+    required this.zetramail,
+    required this.authEmail,
+    required this.username,
+    required this.verified,
+    this.avatarUrl,
+  });
+
+  factory ZetraProfile.fromMap(Map<String, dynamic> map) {
+    return ZetraProfile(
+      id: map['id'] as String,
+      zetramail: map['zetramail'] as String,
+      authEmail: map['auth_email'] as String,
+      username: map['username'] as String? ?? '',
+      verified: map['verified'] as bool? ?? false,
+      avatarUrl: map['avatar_url'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'zetramail': zetramail,
+        'auth_email': authEmail,
+        'username': username,
+        'verified': verified,
+        'avatar_url': avatarUrl,
+      };
+}
+
+class ZetraAuthException implements Exception {
+  final String message;
+  ZetraAuthException(this.message);
+
+  @override
+  String toString() => message;
+}
+
+class AuthService {
+  AuthService._();
+  static final AuthService instance = AuthService._();
+
+  static const String noAccountMessage = 'This ZetraMail account does not exist.';
+  static const String invalidOtpMessage = 'Invalid verification code.';
+
+  SupabaseClient get _client => Supabase.instance.client;
+
+  String? _pendingAuthEmail;
+  String? _pendingZetramail;
+
+  String? get pendingZetramail => _pendingZetramail;
+
+  bool get isSignedIn => _client.auth.currentSession != null;
+
+  /// Step 1: call the resolve_login_email(identifier) RPC with the entered
+  /// ZetraMail address. This RPC lives on the backend and is the ONLY
+  /// approved way to resolve zetramail -> auth_email; we deliberately do
+  /// NOT do a client-side `.from('profiles').select(...)` here, because
+  /// that path is subject to RLS and was silently returning null for
+  /// unauthenticated (pre-login) callers even when a matching profile
+  /// row existed — which was the root cause of the previous
+  /// "No Zetra account found" bug.
+  /// Step 2: if the RPC returns null/empty, throw before ever calling
+  /// signInWithOtp.
+  /// Step 3: otherwise call signInWithOtp() using ONLY the resolved
+  /// auth_email, with shouldCreateUser: false.
+  Future<String> requestOtpForZetraMail(String zetramail) async {
+    final normalized = zetramail.trim().toLowerCase();
+
+    // DEBUG 1: entered ZetraMail
+    debugPrint('[ZetraAuth] Entered ZetraMail: "$normalized"');
+
+    if (normalized.isEmpty) {
+      debugPrint('[ZetraAuth] Empty ZetraMail after trim — aborting before any RPC/Auth call.');
+      throw ZetraAuthException(noAccountMessage);
+    }
+
+    dynamic result;
+    try {
+      result = await _client.rpc(
+        'resolve_login_email',
+        params: {'identifier': normalized},
+      );
+    } on PostgrestException catch (e) {
+      // DEBUG 2: RPC call failed (query-level error)
+      debugPrint('[ZetraAuth] resolve_login_email RPC FAILED (PostgrestException): '
+          'code=${e.code}, message=${e.message}, details=${e.details}, hint=${e.hint}');
+      throw ZetraAuthException(noAccountMessage);
+    }
+
+    // DEBUG 2: raw RPC result
+    debugPrint('[ZetraAuth] resolve_login_email RPC result: $result (type: ${result.runtimeType})');
+
+    // The RPC may return a plain string, or (depending on how it's
+    // declared) a single-row/single-column result — handle both shapes
+    // defensively without guessing at schema details.
+    String? authEmail;
+    if (result is String && result.isNotEmpty) {
+      authEmail = result;
+    } else if (result is Map && result.values.isNotEmpty) {
+      final first = result.values.first;
+      if (first is String && first.isNotEmpty) authEmail = first;
+    } else if (result is List && result.isNotEmpty) {
+      final row = result.first;
+      if (row is String && row.isNotEmpty) {
+        authEmail = row;
+      } else if (row is Map && row.values.isNotEmpty) {
+        final first = row.values.first;
+        if (first is String && first.isNotEmpty) authEmail = first;
+      }
+    }
+
+    if (authEmail == null || authEmail.isEmpty) {
+      debugPrint('[ZetraAuth] resolve_login_email returned null/empty for '
+          'identifier="$normalized" — no matching Zetra account.');
+      throw ZetraAuthException(noAccountMessage);
+    }
+
+    // DEBUG 3: auth_email resolved via RPC
+    debugPrint('[ZetraAuth] auth_email resolved via RPC: "$authEmail"');
+
+    // Sanity check: confirm we are about to call signInWithOtp with
+    // auth_email (NOT zetramail), and shouldCreateUser: false.
+    debugPrint('[ZetraAuth] About to call signInWithOtp('
+        'email: "$authEmail", shouldCreateUser: false) '
+        '— entered zetramail was "$normalized".');
+
+    try {
+      await _client.auth.signInWithOtp(
+        email: authEmail,
+        shouldCreateUser: false, // NaijaLearn never creates new accounts
+      );
+      debugPrint('[ZetraAuth] signInWithOtp() SUCCEEDED for "$authEmail".');
+    } on AuthException catch (e) {
+      // DEBUG 4: exact Supabase Auth error from signInWithOtp()
+      debugPrint('[ZetraAuth] signInWithOtp() FAILED (AuthException): '
+          'message="${e.message}", statusCode=${e.statusCode}');
+      throw ZetraAuthException(noAccountMessage);
+    } catch (e, st) {
+      debugPrint('[ZetraAuth] signInWithOtp() FAILED (non-AuthException, e.g. network): $e');
+      debugPrint('[ZetraAuth] Stack trace: $st');
+      rethrow;
+    }
+
+    _pendingAuthEmail = authEmail;
+    _pendingZetramail = normalized;
+
+    return authEmail;
+  }
+
+  /// Step 4: verify OTP using auth_email (never the zetramail).
+  /// Step 5: load the profile row so the UI can display it.
+  Future<ZetraProfile> verifyOtpAndLoadProfile({
+    required String token,
+    String? authEmailOverride,
+  }) async {
+    final authEmail = authEmailOverride ?? _pendingAuthEmail;
+
+    debugPrint('[ZetraAuth] verifyOTP() called with authEmail="$authEmail", '
+        'token="${token.trim()}"');
+
+    if (authEmail == null) {
+      debugPrint('[ZetraAuth] verifyOTP() aborted — no pending authEmail set.');
+      throw ZetraAuthException('No pending sign-in request. Please start again.');
+    }
+
+    try {
+      final res = await _client.auth.verifyOTP(
+        type: OtpType.email,
+        email: authEmail,
+        token: token.trim(),
+      );
+      debugPrint('[ZetraAuth] verifyOTP() response: '
+          'session=${res.session != null}, user=${res.user != null}, '
+          'userId=${res.user?.id}');
+      if (res.session == null || res.user == null) {
+        debugPrint('[ZetraAuth] verifyOTP() returned null session/user with no thrown '
+            'exception — treating as invalid OTP.');
+        throw ZetraAuthException(invalidOtpMessage);
+      }
+    } on AuthException catch (e) {
+      // DEBUG 5: exact error from verifyOTP()
+      debugPrint('[ZetraAuth] verifyOTP() FAILED (AuthException): '
+          'message="${e.message}", statusCode=${e.statusCode}');
+      throw ZetraAuthException(invalidOtpMessage);
+    } catch (e, st) {
+      debugPrint('[ZetraAuth] verifyOTP() FAILED (non-AuthException): $e');
+      debugPrint('[ZetraAuth] Stack trace: $st');
+      rethrow;
+    }
+
+    final profile = await loadCurrentProfile();
+
+    _pendingAuthEmail = null;
+    _pendingZetramail = null;
+
+    return profile;
+  }
+
+  /// Loads the `profiles` row for the currently authenticated user.
+  /// This runs AFTER sign-in, so it's a client-side select against the
+  /// user's own row — RLS should permit `auth.uid() == id` reads here,
+  /// which is a different context from the pre-login lookup in
+  /// requestOtpForZetraMail (which now goes through the RPC instead).
+  Future<ZetraProfile> loadCurrentProfile() async {
+    final user = _client.auth.currentUser;
+    if (user == null) {
+      throw ZetraAuthException('Not signed in.');
+    }
+
+    Map<String, dynamic>? row;
+    try {
+      row = await _client.from('profiles').select().eq('id', user.id).maybeSingle();
+    } on PostgrestException catch (e) {
+      debugPrint('[ZetraAuth] loadCurrentProfile() lookup FAILED (PostgrestException): '
+          'code=${e.code}, message=${e.message}, details=${e.details}, hint=${e.hint}');
+      throw ZetraAuthException(noAccountMessage);
+    }
+
+    if (row == null) {
+      debugPrint('[ZetraAuth] loadCurrentProfile(): no profile row for user.id="${user.id}".');
+      throw ZetraAuthException(noAccountMessage);
+    }
+
+    return ZetraProfile.fromMap(row);
+  }
+
+  Future<void> resendOtp() async {
+    if (_pendingAuthEmail == null) {
+      throw ZetraAuthException('No pending sign-in request. Please start again.');
+    }
+    debugPrint('[ZetraAuth] resendOtp() called for authEmail="$_pendingAuthEmail" '
+        '(shouldCreateUser: false)');
+    try {
+      await _client.auth.signInWithOtp(
+        email: _pendingAuthEmail!,
+        shouldCreateUser: false,
+      );
+      debugPrint('[ZetraAuth] resendOtp() SUCCEEDED for "$_pendingAuthEmail".');
+    } on AuthException catch (e) {
+      debugPrint('[ZetraAuth] resendOtp() FAILED (AuthException): '
+          'message="${e.message}", statusCode=${e.statusCode}');
+      throw ZetraAuthException('Could not resend code. Please try again.');
+    }
+  }
+
+  Future<void> signOut() async {
+    await _client.auth.signOut();
+    _pendingAuthEmail = null;
+    _pendingZetramail = null;
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _zetramailController = TextEditingController();
+  bool _loading = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _zetramailController.dispose();
+    super.dispose();
+  }
+
+  String? _validateZetraMail(String? value) {
+    final email = value?.trim() ?? '';
+    if (email.isEmpty) return 'Please enter your ZetraMail address';
+    final emailRegex = RegExp(r'^[\w.+-]+@[\w-]+\.[\w.-]+$');
+    if (!emailRegex.hasMatch(email)) return 'Please enter a valid email';
+    return null;
+  }
+
+  Future<void> _continue() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
+
+    final zetramail = _zetramailController.text.trim();
+
+    try {
+      final authEmail = await AuthService.instance.requestOtpForZetraMail(zetramail);
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => VerifyOtpScreen(zetramail: zetramail, authEmail: authEmail),
+        ),
+      );
+    } on ZetraAuthException catch (e) {
+      setState(() => _errorMessage = e.message);
+    } catch (e) {
+      setState(() => _errorMessage = 'Could not send code. Please check your connection and try again.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Zetra ID',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: kZetraGreen,
-          primary: kZetraGreen,
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF6FBF8),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: kZetraGreen,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          centerTitle: true,
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: kZetraGreen,
-            foregroundColor: Colors.white,
-            minimumSize: const Size.fromHeight(50),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: kZetraGreen, width: 2),
+    final scheme = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    width: 88,
+                    height: 88,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: scheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Icon(Icons.school_rounded, size: 46, color: scheme.primary),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'Welcome to NaijaLearn',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Sign in with your ZetraMail address',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 32),
+                  TextFormField(
+                    controller: _zetramailController,
+                    keyboardType: TextInputType.emailAddress,
+                    autofillHints: const [AutofillHints.email],
+                    textInputAction: TextInputAction.done,
+                    validator: _validateZetraMail,
+                    onFieldSubmitted: (_) => _continue(),
+                    decoration: InputDecoration(
+                      labelText: 'ZetraMail address',
+                      hintText: 'you@zetramail.ng',
+                      prefixIcon: const Icon(Icons.email_outlined),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                  if (_errorMessage != null) ...[
+                    const SizedBox(height: 12),
+                    Text(_errorMessage!, style: TextStyle(color: scheme.error, fontSize: 13)),
+                  ],
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    height: 52,
+                    child: FilledButton(
+                      onPressed: _loading ? null : _continue,
+                      child: _loading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                            )
+                          : const Text('Send Code', style: TextStyle(fontSize: 16)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
-      home: const AuthGate(),
     );
   }
 }
 
-class ApiFailure {
-  final String message;
-  final bool isNetworkError;
-  ApiFailure(this.message, {this.isNetworkError = false});
-}
+class VerifyOtpScreen extends StatefulWidget {
+  /// The ZetraMail address the user typed — shown on screen.
+  final String zetramail;
+  /// The internal auth_email resolved from resolve_login_email() — used
+  /// for the actual Supabase Auth call. Never shown to the user.
+  final String authEmail;
 
-Widget buildErrorBanner(String message) {
-  return Container(
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: Colors.red.shade50,
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: Colors.red.shade200),
-    ),
-    child: Row(
-      children: [
-        Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(message, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
-        ),
-      ],
-    ),
-  );
-}
-
-Widget buildStepIndicator(int currentStep) {
-  Widget dot(bool active) => Container(
-        width: active ? 28 : 8,
-        height: 8,
-        decoration: BoxDecoration(
-          color: active ? kZetraGreen : Colors.grey.shade300,
-          borderRadius: BorderRadius.circular(4),
-        ),
-      );
-  return Row(
-    mainAxisAlignment: MainAxisAlignment.center,
-    children: [
-      dot(currentStep == 1),
-      const SizedBox(width: 6),
-      dot(currentStep == 2),
-    ],
-  );
-}
-
-String formatDisplayDate(String isoDate) {
-  final parts = isoDate.split('-');
-  if (parts.length != 3) return isoDate;
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  final year = parts[0];
-  final month = int.tryParse(parts[1]) ?? 1;
-  final day = int.tryParse(parts[2]) ?? 1;
-  return '$day ${months[month - 1]} $year';
-}
-
-// =====================================================================
-// AuthGate
-//
-// On cold start, trusts Supabase's own persisted session to decide
-// whether to show AuthEntryScreen or RootScreen. After a fresh
-// sign-up/sign-in, _authenticated is intentionally NOT flipped by the
-// auth-state stream immediately — WelcomeScreen is shown first, and
-// only calling onAuthenticated() (via its "Continue" button) switches
-// to RootScreen. The stream is used only to catch involuntary
-// sign-outs (expired/revoked session), which bounce the user back to
-// AuthEntryScreen.
-// =====================================================================
-class AuthGate extends StatefulWidget {
-  const AuthGate({super.key});
+  const VerifyOtpScreen({super.key, required this.zetramail, required this.authEmail});
 
   @override
-  State<AuthGate> createState() => _AuthGateState();
+  State<VerifyOtpScreen> createState() => _VerifyOtpScreenState();
 }
 
-class _AuthGateState extends State<AuthGate> {
-  bool _authenticated = false;
-  late final StreamSubscription<AuthState> _authSubscription;
+class _VerifyOtpScreenState extends State<VerifyOtpScreen> with WidgetsBindingObserver {
+  final _formKey = GlobalKey<FormState>();
+  final _codeController = TextEditingController();
+  bool _loading = false;
+  bool _resending = false;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _authenticated = supabase.auth.currentSession != null;
-    _authSubscription = supabase.auth.onAuthStateChange.listen((data) {
-      if (!mounted) return;
-      if (data.event == AuthChangeEvent.signedOut) {
-        setState(() => _authenticated = false);
-      }
-    });
+    // Observes app lifecycle (e.g. backgrounding to check ZetraMail and
+    // returning). Deliberately does NOT clear the entered code, reset the
+    // form, or navigate away on resume — Flutter keeps this State object
+    // alive in memory the whole time, so nothing here needs to "restore"
+    // anything. This observer exists purely so future edits don't
+    // accidentally add a reset-on-resume bug.
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Intentionally left as a no-op for our state. The widget tree and
+    // this State object are not recreated when switching to ZetraMail
+    // and back, so _codeController's text and _errorMessage survive
+    // automatically without any code here.
   }
 
   @override
   void dispose() {
-    _authSubscription.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _codeController.dispose();
     super.dispose();
   }
 
-  void _onAuthenticated() {
-    setState(() => _authenticated = true);
-  }
-
-  void _onLoggedOut() {
-    setState(() => _authenticated = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_authenticated) {
-      return AuthEntryScreen(onAuthenticated: _onAuthenticated);
-    }
-    return RootScreen(onLoggedOut: _onLoggedOut);
-  }
-}
-
-// =====================================================================
-// AuthEntryScreen — login with username or Zetra ID, or go to signup.
-// =====================================================================
-class AuthEntryScreen extends StatefulWidget {
-  final VoidCallback onAuthenticated;
-  const AuthEntryScreen({super.key, required this.onAuthenticated});
-
-  @override
-  State<AuthEntryScreen> createState() => _AuthEntryScreenState();
-}
-
-class _AuthEntryScreenState extends State<AuthEntryScreen> {
-  final _identifierController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _obscurePassword = true;
-  bool _isLoading = false;
-  String? _errorMessage;
-
-  @override
-  void dispose() {
-    _identifierController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _login() async {
-    if (_identifierController.text.trim().isEmpty) {
-      setState(() => _errorMessage = 'Enter your username or Zetra ID.');
-      return;
-    }
-    if (_passwordController.text.length < 8) {
-      setState(() => _errorMessage = 'Password must be at least 8 characters.');
-      return;
-    }
-
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final identifier = _identifierController.text.trim();
-      final resolvedEmail = await supabase
-          .rpc('resolve_login_email', params: {'p_identifier': identifier})
-          .timeout(const Duration(seconds: 20)) as String?;
-
-      if (resolvedEmail == null) {
-        setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
-        return;
-      }
-
-      final response = await supabase.auth
-          .signInWithPassword(email: resolvedEmail, password: _passwordController.text)
-          .timeout(const Duration(seconds: 20));
-
-      if (response.session == null) {
-        setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
-        return;
-      }
-
-      final username = (response.user?.userMetadata?['username'] as String?) ?? '';
-
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => WelcomeScreen(username: username, onContinue: widget.onAuthenticated),
-        ),
-      );
-    } on AuthException catch (_) {
-      setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
-    } on PostgrestException catch (_) {
-      setState(() => _errorMessage = 'Something went wrong. Please try again.');
-    } on SocketException {
-      setState(() => _errorMessage = 'No internet connection. Check your network and try again.');
-    } on TimeoutException {
-      setState(() => _errorMessage = 'Could not reach the server. Please try again.');
-    } catch (e) {
-      setState(() => _errorMessage = 'Something went wrong. Please try again.');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  void _goToRegister() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => RegisterScreenOne(onAuthenticated: widget.onAuthenticated)),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 48),
-              Center(
-                child: Container(
-                  width: 84,
-                  height: 84,
-                  decoration: BoxDecoration(color: kZetraGreen, borderRadius: BorderRadius.circular(20)),
-                  child: const Icon(Icons.badge_outlined, color: Colors.white, size: 44),
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Welcome back',
-                style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Log in with your username or Zetra ID',
-                style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 32),
-              TextField(
-                controller: _identifierController,
-                decoration: const InputDecoration(
-                  labelText: 'Username or Zetra ID',
-                  prefixIcon: Icon(Icons.person_outline),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _passwordController,
-                obscureText: _obscurePassword,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-              if (_errorMessage != null) ...[
-                buildErrorBanner(_errorMessage!),
-                const SizedBox(height: 16),
-              ],
-              ElevatedButton(
-                onPressed: _isLoading ? null : _login,
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 22,
-                        width: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
-                      )
-                    : const Text('Log In'),
-              ),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: _isLoading ? null : _goToRegister,
-                child: const Text(
-                  "Don't have a Zetra ID? Create one",
-                  style: TextStyle(color: kZetraGreenDark, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// =====================================================================
-// RegisterScreenOne — full name, username, password, confirm password.
-// =====================================================================
-class RegisterScreenOne extends StatefulWidget {
-  final VoidCallback onAuthenticated;
-  const RegisterScreenOne({super.key, required this.onAuthenticated});
-
-  @override
-  State<RegisterScreenOne> createState() => _RegisterScreenOneState();
-}
-
-class _RegisterScreenOneState extends State<RegisterScreenOne> {
-  final _fullNameController = TextEditingController();
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
-  bool _obscurePassword = true;
-  bool _obscureConfirm = true;
-  String? _errorMessage;
-
-  @override
-  void dispose() {
-    _fullNameController.dispose();
-    _usernameController.dispose();
-    _passwordController.dispose();
-    _confirmPasswordController.dispose();
-    super.dispose();
-  }
-
-  String? _validate() {
-    if (_fullNameController.text.trim().isEmpty) {
-      return 'Enter your full name.';
-    }
-    if (_usernameController.text.trim().length < 3) {
-      return 'Username must be at least 3 characters.';
-    }
-    if (_passwordController.text.length < 8) {
-      return 'Password must be at least 8 characters.';
-    }
-    if (_passwordController.text != _confirmPasswordController.text) {
-      return 'Passwords do not match.';
+  String? _validateCode(String? value) {
+    final code = value?.trim() ?? '';
+    if (code.isEmpty) return 'Please enter the code';
+    if (code.length != 6 || int.tryParse(code) == null) {
+      return 'Enter the 6-digit code';
     }
     return null;
   }
 
-  void _continue() {
-    final error = _validate();
-    if (error != null) {
-      setState(() => _errorMessage = error);
-      return;
-    }
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RegisterScreenTwo(
-          fullName: _fullNameController.text.trim(),
-          username: _usernameController.text.trim(),
-          password: _passwordController.text,
-          onAuthenticated: widget.onAuthenticated,
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Create your Zetra ID')),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              buildStepIndicator(1),
-              const SizedBox(height: 24),
-              const Text('Tell us about you', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              Text('Step 1 of 2', style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
-              const SizedBox(height: 28),
-              TextField(
-                controller: _fullNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Full Name',
-                  prefixIcon: Icon(Icons.badge_outlined),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _usernameController,
-                decoration: const InputDecoration(
-                  labelText: 'Username',
-                  prefixIcon: Icon(Icons.person_outline),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _passwordController,
-                obscureText: _obscurePassword,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _confirmPasswordController,
-                obscureText: _obscureConfirm,
-                decoration: InputDecoration(
-                  labelText: 'Confirm Password',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscureConfirm ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              if (_errorMessage != null) ...[
-                buildErrorBanner(_errorMessage!),
-                const SizedBox(height: 16),
-              ],
-              ElevatedButton(onPressed: _continue, child: const Text('Continue')),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// =====================================================================
-// RegisterScreenTwo — date of birth, gender, country, then creation.
-// =====================================================================
-class RegisterScreenTwo extends StatefulWidget {
-  final String fullName;
-  final String username;
-  final String password;
-  final VoidCallback onAuthenticated;
-  const RegisterScreenTwo({
-    super.key,
-    required this.fullName,
-    required this.username,
-    required this.password,
-    required this.onAuthenticated,
-  });
-
-  @override
-  State<RegisterScreenTwo> createState() => _RegisterScreenTwoState();
-}
-
-class _RegisterScreenTwoState extends State<RegisterScreenTwo> {
-  DateTime? _dateOfBirth;
-  String? _gender;
-  String? _country;
-  bool _isLoading = false;
-  String? _errorMessage;
-
-  static const List<String> _genderOptions = ['Male', 'Female', 'Prefer not to say'];
-
-  Future<void> _pickDateOfBirth() async {
-    final now = DateTime.now();
-    final initial = _dateOfBirth ?? DateTime(now.year - 18, now.month, now.day);
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(now.year - 100),
-      lastDate: DateTime(now.year - 13, now.month, now.day),
-      helpText: 'Select date of birth',
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: Theme.of(context).colorScheme.copyWith(primary: kZetraGreen),
-          ),
-          child: child!,
-        );
-      },
-    );
-    if (picked != null) setState(() => _dateOfBirth = picked);
-  }
-
-  String _formatPickedDate(DateTime d) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${d.day} ${months[d.month - 1]} ${d.year}';
-  }
-
-  Future<void> _createAccount() async {
-    if (_dateOfBirth == null) {
-      setState(() => _errorMessage = 'Please select your date of birth.');
-      return;
-    }
+  Future<void> _verifyCode() async {
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() {
-      _isLoading = true;
+      _loading = true;
       _errorMessage = null;
     });
 
     try {
-      final internalEmail = await supabase
-          .rpc('internal_auth_email', params: {'p_username': widget.username})
-          .timeout(const Duration(seconds: 15)) as String;
+      final profile = await AuthService.instance.verifyOtpAndLoadProfile(
+        token: _codeController.text.trim(),
+        authEmailOverride: widget.authEmail,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => HomeScreen(profile: profile)),
+        (route) => false,
+      );
+    } on ZetraAuthException catch (e) {
+      setState(() => _errorMessage = e.message);
+    } catch (e) {
+      setState(() => _errorMessage = 'Invalid or expired code. Please try again.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
-      final availabilityRaw = await supabase
-          .rpc('check_registration_availability', params: {
-            'p_username': widget.username,
-            'p_email': internalEmail,
-            'p_phone': null,
-          })
-          .timeout(const Duration(seconds: 20));
-      final availability = Map<String, dynamic>.from(availabilityRaw as Map);
+  Future<void> _resendCode() async {
+    setState(() {
+      _resending = true;
+      _errorMessage = null;
+    });
+    try {
+      await AuthService.instance.resendOtp();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('A new code has been sent to your ZetraMail inbox.')),
+      );
+    } on ZetraAuthException catch (e) {
+      setState(() => _errorMessage = e.message);
+    } catch (e) {
+      setState(() => _errorMessage = 'Could not resend code. Please try again.');
+    } finally {
+      if (mounted) setState(() => _resending = false);
+    }
+  }
 
-      if (availability['username_taken'] == true) {
-        setState(() => _errorMessage = 'That username is already taken.');
-        return;
-      }
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
 
-      final dob =
-          '${_dateOfBirth!.year.toString().padLeft(4, '0')}-${_dateOfBirth!.month.toString().padLeft(2, '0')}-${_dateOfBirth!.day.toString().padLeft(2, '0')}';
+    return Scaffold(
+      appBar: AppBar(title: const Text('Verify Your Email')),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Icon(Icons.mark_email_read_rounded, size: 56, color: scheme.primary),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Enter the 6-digit code sent to your ZetraMail inbox for',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.zetramail,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Open the ZetraMail app, copy the code, then come back here — this screen stays exactly as you left it.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 28),
+                  TextFormField(
+                    controller: _codeController,
+                    keyboardType: TextInputType.number,
+                    maxLength: 6,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 22, letterSpacing: 8, fontWeight: FontWeight.bold),
+                    validator: _validateCode,
+                    onFieldSubmitted: (_) => _verifyCode(),
+                    decoration: InputDecoration(
+                      counterText: '',
+                      hintText: '------',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                  if (_errorMessage != null) ...[
+                    const SizedBox(height: 8),
+                    Text(_errorMessage!, style: TextStyle(color: scheme.error, fontSize: 13), textAlign: TextAlign.center),
+                  ],
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    height: 52,
+                    child: FilledButton(
+                      onPressed: _loading ? null : _verifyCode,
+                      child: _loading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                            )
+                          : const Text('Verify', style: TextStyle(fontSize: 16)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: _resending ? null : _resendCode,
+                    child: _resending
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Resend Code'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
-      final response = await supabase.auth
-          .signUp(
-            email: internalEmail,
-            password: widget.password,
-            data: {
-              'username': widget.username,
-              'full_name': widget.fullName,
-              'date_of_birth': dob,
-              if (_gender != null) 'gender': _gender,
-              if (_country != null) 'country': _country,
-            },
-          )
-          .timeout(const Duration(seconds: 20));
+/// =========================================================================
+/// MODELS
+/// =========================================================================
 
-      if (response.session == null) {
-        setState(() => _errorMessage = 'Something went wrong creating your account. Please try again.');
-        return;
+class Question {
+  final String id;
+  final String subject;
+  final int year;
+  final String questionText;
+  final List<String> options;
+  final int correctIndex;
+  final String explanation;
+
+  const Question({
+    required this.id,
+    required this.subject,
+    required this.year,
+    required this.questionText,
+    required this.options,
+    required this.correctIndex,
+    this.explanation = '',
+  });
+
+  factory Question.fromJson(Map<String, dynamic> json, {String? fallbackId}) {
+    return Question(
+      id: (json['id'] as String?) ?? fallbackId ?? '${json['subject']}_${json['year']}_${json.hashCode}',
+      subject: json['subject'] as String,
+      year: json['year'] as int,
+      questionText: json['question'] as String,
+      options: List<String>.from(json['options'] as List),
+      correctIndex: json['correctIndex'] as int,
+      explanation: (json['explanation'] as String?) ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'subject': subject,
+        'year': year,
+        'question': questionText,
+        'options': options,
+        'correctIndex': correctIndex,
+        'explanation': explanation,
+      };
+}
+
+class SubjectInfo {
+  final String name;
+  final IconData icon;
+  final Color color;
+  const SubjectInfo(this.name, this.icon, this.color);
+}
+
+// Only subjects with a real question file wired in should appear here —
+// otherwise SubjectCard will show "0 questions" for the rest. Add more
+// entries as you wire in each new subject file.
+const List<SubjectInfo> kSubjects = [
+  SubjectInfo('English', Icons.menu_book_rounded, Color(0xFF3F51B5)),
+  SubjectInfo('Mathematics', Icons.calculate_rounded, Colors.blue),
+  SubjectInfo('Physics', Icons.science_rounded, Colors.deepPurple),
+  SubjectInfo('Chemistry', Icons.biotech_rounded, Colors.red),
+  SubjectInfo('Biology', Icons.eco_rounded, Colors.green),
+  SubjectInfo('Economics', Icons.attach_money_rounded, Colors.teal),
+  SubjectInfo('Government', Icons.account_balance_rounded, Colors.indigo),
+  SubjectInfo('Geography', Icons.public_rounded, Colors.brown),
+  SubjectInfo('Literature', Icons.menu_book_rounded, Colors.purple),
+  SubjectInfo('Commerce', Icons.shopping_cart_rounded, Colors.orange),
+  SubjectInfo('Accounting', Icons.receipt_long_rounded, Colors.cyan),
+  SubjectInfo('CRS', Icons.auto_stories_rounded, Colors.deepOrange),
+  SubjectInfo('IRS', Icons.mosque_rounded, Colors.green),
+  SubjectInfo('Arabic', Icons.translate_rounded, Colors.lime),
+];
+
+/// =========================================================================
+/// QUESTION REPOSITORY (swap-friendly data source)
+/// =========================================================================
+
+class QuestionRepository {
+  QuestionRepository._();
+
+  static List<Question> _questions = _buildFromRawData([
+  ...englishQuestions,
+  ...mathematicsQuestions,
+  ...physicsQuestions,
+  ...chemistryQuestions,
+  ...biologyQuestions,
+  ...economicsQuestions,
+  ...governmentQuestions,
+  ...geographyQuestions,
+  ...literatureQuestions,
+  ...commerceQuestions,
+  ...accountingQuestions,
+  ...crsQuestions,
+  ...irsQuestions,
+  ...arabicQuestions,
+]);
+
+  static List<Question> _buildFromRawData(List<Map<String, dynamic>> raw) {
+    final List<Question> list = [];
+    for (final map in raw) {
+      list.add(Question.fromJson(map, fallbackId: '${map['subject']}_${map['year']}_${list.length}'));
+    }
+    return list;
+  }
+
+  static void loadFromJsonList(List<Map<String, dynamic>> jsonList) {
+    _questions = _buildFromRawData(jsonList);
+  }
+
+  static void loadFromJsonString(String jsonStr) {
+    final decoded = jsonDecode(jsonStr) as List<dynamic>;
+    loadFromJsonList(decoded.cast<Map<String, dynamic>>());
+  }
+
+  static List<Question> getAll() => List.unmodifiable(_questions);
+
+  static List<Question> getForSubject(String subject) =>
+      _questions.where((q) => q.subject == subject).toList();
+}
+
+/// =========================================================================
+/// APP ROOT — theming
+/// =========================================================================
+
+class NaijaLearnApp extends StatelessWidget {
+  const NaijaLearnApp({super.key});
+
+  static const Color _seed = Color(0xFF00A86B); // Nigerian green
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<AppProvider>();
+    return MaterialApp(
+      title: 'NaijaLearn',
+      debugShowCheckedModeBanner: false,
+      themeMode: provider.darkMode ? ThemeMode.dark : ThemeMode.light,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: _seed, brightness: Brightness.light),
+        scaffoldBackgroundColor: const Color(0xFFF7F9F8),
+        fontFamily: 'Roboto',
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: _seed, brightness: Brightness.dark),
+        scaffoldBackgroundColor: const Color(0xFF101312),
+        fontFamily: 'Roboto',
+      ),
+      home: const SplashScreen(),
+    );
+  }
+}
+
+/// =========================================================================
+/// SPLASH SCREEN
+/// =========================================================================
+
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _fade;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+    _fade = CurvedAnimation(parent: _controller, curve: const Interval(0.0, 0.7, curve: Curves.easeIn));
+    _scale = Tween<double>(begin: 0.7, end: 1.0)
+        .animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+    _controller.forward();
+    // This timer fires exactly once, only when SplashScreen is first
+    // built (app cold start). It does not re-run when the app is merely
+    // backgrounded/foregrounded, since SplashScreen is popped off the
+    // stack immediately after this navigation and never rebuilt again
+    // during the session.
+    Timer(const Duration(milliseconds: 2000), () async {
+      if (!mounted) return;
+
+      final hasSession = Supabase.instance.client.auth.currentSession != null;
+      Widget destination;
+
+      if (hasSession) {
+        try {
+          final profile = await AuthService.instance.loadCurrentProfile();
+          destination = HomeScreen(profile: profile);
+        } catch (_) {
+          // Session exists but no matching profile row (e.g. deleted
+          // account) — fall back to login rather than crash.
+          destination = const LoginScreen();
+        }
+      } else {
+        destination = const LoginScreen();
       }
 
       if (!mounted) return;
-      await Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (_) => WelcomeScreen(username: widget.username, onContinue: widget.onAuthenticated),
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 500),
+          pageBuilder: (_, animation, __) => FadeTransition(opacity: animation, child: destination),
         ),
-        (route) => route.isFirst,
       );
-    } on AuthException catch (e) {
-      setState(() => _errorMessage = e.message.isNotEmpty ? e.message : 'Something went wrong. Please try again.');
-    } on PostgrestException catch (_) {
-      setState(() => _errorMessage = 'Something went wrong. Please try again.');
-    } on SocketException {
-      setState(() => _errorMessage = 'No internet connection. Check your network and try again.');
-    } on TimeoutException {
-      setState(() => _errorMessage = 'Could not reach the server. Please try again.');
-    } catch (e) {
-      setState(() => _errorMessage = 'Something went wrong. Please try again.');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Create your Zetra ID')),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              buildStepIndicator(2),
-              const SizedBox(height: 24),
-              const Text('A few more details', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              Text('Step 2 of 2', style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
-              const SizedBox(height: 28),
-              InkWell(
-                onTap: _pickDateOfBirth,
-                borderRadius: BorderRadius.circular(12),
-                child: InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: 'Date of Birth',
-                    prefixIcon: Icon(Icons.cake_outlined),
-                  ),
-                  child: Text(
-                    _dateOfBirth == null ? 'Select date' : _formatPickedDate(_dateOfBirth!),
-                    style: TextStyle(
-                      color: _dateOfBirth == null ? Colors.grey.shade600 : Colors.black87,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              DropdownButtonFormField<String>(
-                value: _gender,
-                decoration: const InputDecoration(
-                  labelText: 'Gender (optional)',
-                  prefixIcon: Icon(Icons.people_outline),
-                ),
-                items: _genderOptions.map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
-                onChanged: (v) => setState(() => _gender = v),
-              ),
-              const SizedBox(height: 14),
-              DropdownButtonFormField<String>(
-                value: _country,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Country (optional)',
-                  prefixIcon: Icon(Icons.public_outlined),
-                ),
-                items: kCountries.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (v) => setState(() => _country = v),
-              ),
-              const SizedBox(height: 20),
-              if (_errorMessage != null) ...[
-                buildErrorBanner(_errorMessage!),
-                const SizedBox(height: 16),
-              ],
-              ElevatedButton(
-                onPressed: _isLoading ? null : _createAccount,
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 22,
-                        width: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
-                      )
-                    : const Text('Create Zetra ID'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class WelcomeScreen extends StatelessWidget {
-  final String username;
-  final VoidCallback onContinue;
-  const WelcomeScreen({super.key, required this.username, required this.onContinue});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kZetraGreen,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white, size: 88),
-              const SizedBox(height: 24),
-              Text(
-                username.isNotEmpty ? 'Welcome, $username!' : 'Welcome to Zetra!',
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'Your Zetra ID is ready. It works across every Zetra app — NAI, Nigergram, ZTC, and more.',
-                style: TextStyle(fontSize: 15, color: Colors.white70),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 40),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: kZetraGreen,
-                  ),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    onContinue();
-                  },
-                  child: const Text('Continue'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Hosts the bottom navigation: Zetra ID tab and ZetraMail tab.
-class RootScreen extends StatefulWidget {
-  final VoidCallback onLoggedOut;
-  const RootScreen({super.key, required this.onLoggedOut});
-
-  @override
-  State<RootScreen> createState() => _RootScreenState();
-}
-
-class _RootScreenState extends State<RootScreen> {
-  int _tabIndex = 0;
-  int _unreadCount = 0;
-
-  void _updateUnreadCount(int count) {
-    if (mounted) setState(() => _unreadCount = count);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final screens = [
-      HomeScreen(onLoggedOut: widget.onLoggedOut),
-      MessagesScreen(onUnreadCountChanged: _updateUnreadCount),
-    ];
-
-    return Scaffold(
-      body: IndexedStack(index: _tabIndex, children: screens),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tabIndex,
-        onDestinationSelected: (i) => setState(() => _tabIndex = i),
-        destinations: [
-          const NavigationDestination(icon: Icon(Icons.badge_outlined), label: 'Zetra ID'),
-          NavigationDestination(
-            icon: Badge(
-              label: Text('$_unreadCount'),
-              isLabelVisible: _unreadCount > 0,
-              child: const Icon(Icons.mail_outline),
-            ),
-            label: 'ZetraMail',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class HomeScreen extends StatefulWidget {
-  final VoidCallback onLoggedOut;
-  const HomeScreen({super.key, required this.onLoggedOut});
-
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends State<HomeScreen> {
-  bool _isLoading = true;
-  ApiFailure? _failure;
-  Map<String, dynamic>? _user;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetchZetraId();
-  }
-
-  Future<void> _fetchZetraId() async {
-    setState(() {
-      _isLoading = true;
-      _failure = null;
     });
-
-    try {
-      final userId = supabase.auth.currentUser?.id;
-      if (userId == null) {
-        await _logout();
-        return;
-      }
-
-      final data = await supabase
-          .from('profiles')
-          .select('zetra_id, username, zetramail, full_name, date_of_birth, gender, country')
-          .eq('id', userId)
-          .single()
-          .timeout(const Duration(seconds: 20));
-
-      setState(() => _user = Map<String, dynamic>.from(data));
-    } on PostgrestException catch (e) {
-      final isAuthError = e.code == 'PGRST301' || e.message.toLowerCase().contains('jwt');
-      if (isAuthError) {
-        await _logout();
-        return;
-      }
-      setState(() => _failure = ApiFailure('Could not load your Zetra ID (${e.code ?? 'error'}).'));
-    } on SocketException {
-      setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
-    } on TimeoutException {
-      setState(() => _failure = ApiFailure('The request timed out. Please try again.', isNetworkError: true));
-    } catch (e) {
-      setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
   }
 
-  Future<void> _logout() async {
-    await supabase.auth.signOut();
-    widget.onLoggedOut();
-  }
-
-  void _confirmLogout() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Log out?'),
-        content: const Text('You will need to log in again to see your Zetra ID.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _logout();
-            },
-            child: const Text('Log out', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _openTermsAndPrivacy() async {
-    final uri = Uri.parse(kTermsAndPrivacyUrl);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open Terms & Privacy Policy.')),
-      );
-    }
-  }
-
-  void _copyToClipboard(String label, String value) {
-    Clipboard.setData(ClipboardData(text: value));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$label copied'),
-        backgroundColor: kZetraGreenDark,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
-
-  Widget _identityCard(String label, String value, IconData icon, {bool copyable = true}) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: kZetraGreen.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: kZetraGreen, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, fontFamily: 'monospace'),
-                ),
-              ],
-            ),
-          ),
-          if (copyable)
-            IconButton(
-              icon: const Icon(Icons.copy_outlined, size: 20, color: kZetraGreenDark),
-              onPressed: () => _copyToClipboard(label, value),
-              tooltip: 'Copy $label',
-            ),
-        ],
-      ),
-    );
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Zetra ID'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.description_outlined),
-            tooltip: 'Terms & Privacy Policy',
-            onPressed: _openTermsAndPrivacy,
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [scheme.primary, scheme.primaryContainer],
           ),
-          IconButton(icon: const Icon(Icons.logout), onPressed: _confirmLogout, tooltip: 'Log out'),
-        ],
-      ),
-      body: RefreshIndicator(
-        color: kZetraGreen,
-        onRefresh: _fetchZetraId,
-        child: ListView(
-          padding: const EdgeInsets.all(20.0),
-          children: [
-            if (_isLoading)
-              const Padding(
-                padding: EdgeInsets.only(top: 60),
-                child: Center(child: CircularProgressIndicator(color: kZetraGreen)),
-              )
-            else if (_failure != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 60),
-                child: Column(
-                  children: [
-                    Icon(
-                      _failure!.isNetworkError ? Icons.wifi_off : Icons.error_outline,
-                      size: 48,
-                      color: Colors.grey.shade400,
+        ),
+        child: Center(
+          child: FadeTransition(
+            opacity: _fade,
+            child: ScaleTransition(
+              scale: _scale,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 110,
+                    height: 110,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(28),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 20, offset: const Offset(0, 8))],
                     ),
-                    const SizedBox(height: 12),
-                    Text(_failure!.message, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700)),
-                    const SizedBox(height: 16),
-                    ElevatedButton(onPressed: _fetchZetraId, child: const Text('Retry')),
-                  ],
-                ),
-              )
-            else if (_user != null) ...[
-              _identityCard('Zetra ID', _user!['zetra_id'] ?? '-', Icons.badge_outlined),
-              _identityCard('Username', _user!['username'] ?? '-', Icons.person_outline),
-              _identityCard('ZetraMail', _user!['zetramail'] ?? '-', Icons.mail_outline),
-              _identityCard('Full Name', _user!['full_name'] ?? '-', Icons.badge, copyable: false),
-              if (_user!['date_of_birth'] != null)
-                _identityCard(
-                  'Date of Birth',
-                  formatDisplayDate(_user!['date_of_birth'] as String),
-                  Icons.cake_outlined,
-                  copyable: false,
-                ),
-              if (_user!['gender'] != null)
-                _identityCard('Gender', _user!['gender'], Icons.people_outline, copyable: false),
-              if (_user!['country'] != null)
-                _identityCard('Country', _user!['country'], Icons.public_outlined, copyable: false),
-              const SizedBox(height: 8),
-              Center(
-                child: TextButton(
-                  onPressed: _openTermsAndPrivacy,
-                  child: Text(
-                    'Terms & Privacy Policy',
-                    style: TextStyle(color: Colors.grey.shade600, decoration: TextDecoration.underline),
+                    child: Icon(Icons.school_rounded, size: 60, color: scheme.primary),
                   ),
-                ),
+                  const SizedBox(height: 24),
+                  const Text('NaijaLearn',
+                      style: TextStyle(fontSize: 34, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 0.5)),
+                  const SizedBox(height: 8),
+                  Text('Practice. Prepare. Pass.', style: TextStyle(fontSize: 15, color: Colors.white.withOpacity(0.9))),
+                ],
               ),
-            ],
-          ],
+            ),
+          ),
         ),
       ),
     );
   }
 }
 
-/// ZetraMail inbox: verification codes and messages sent from
-/// other Zetra apps, from Zetra itself, and from other users.
-/// Also supports viewing messages you've sent.
-class MessagesScreen extends StatefulWidget {
-  final void Function(int unreadCount) onUnreadCountChanged;
-  const MessagesScreen({super.key, required this.onUnreadCountChanged});
+/// =========================================================================
+/// HOME SCREEN
+/// =========================================================================
 
-  @override
-  State<MessagesScreen> createState() => _MessagesScreenState();
-}
+class HomeScreen extends StatelessWidget {
+  /// The signed-in Zetra profile. Nullable so that any existing internal
+  /// navigation to `HomeScreen()` elsewhere in the app (without a profile
+  /// in hand) still compiles; in that case profile info simply isn't shown.
+  final ZetraProfile? profile;
 
-class _MessagesScreenState extends State<MessagesScreen> {
-  bool _isLoading = true;
-  ApiFailure? _failure;
-  List<Map<String, dynamic>> _inbox = [];
-  List<Map<String, dynamic>> _sent = [];
-  int _tab = 0; // 0 = Inbox, 1 = Sent
+  const HomeScreen({super.key, this.profile});
 
-  @override
-  void initState() {
-    super.initState();
-    _fetchMessages();
-  }
-
-  Future<void> _fetchMessages() async {
-    setState(() {
-      _isLoading = true;
-      _failure = null;
-    });
-
-    try {
-      final userId = supabase.auth.currentUser?.id;
-      if (userId == null) {
-        setState(() => _failure = ApiFailure('Your session has expired. Please log in again.'));
-        return;
-      }
-
-      final inboxData = await supabase
-          .from('messages')
-          .select('id, from_app, subject, body, code, read_at, created_at')
-          .eq('user_id', userId)
-          .order('created_at', ascending: false)
-          .timeout(const Duration(seconds: 20));
-
-      final sentData = await supabase
-          .from('messages')
-          .select('id, from_app, subject, body, code, read_at, created_at')
-          .eq('sender_id', userId)
-          .order('created_at', ascending: false)
-          .timeout(const Duration(seconds: 20));
-
-      final inbox = List<Map<String, dynamic>>.from(inboxData as List);
-      final sent = List<Map<String, dynamic>>.from(sentData as List);
-
-      setState(() {
-        _inbox = inbox;
-        _sent = sent;
-      });
-
-      final unread = inbox.where((m) => m['read_at'] == null).length;
-      widget.onUnreadCountChanged(unread);
-    } on PostgrestException catch (e) {
-      setState(() => _failure = ApiFailure('Could not load ZetraMail (${e.code ?? 'error'}).'));
-    } on SocketException {
-      setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
-    } on TimeoutException {
-      setState(() => _failure = ApiFailure('The request timed out. Please try again.', isNetworkError: true));
-    } catch (e) {
-      setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _markRead(String id) async {
-    try {
-      final result = await supabase
-          .rpc('mark_message_read', params: {'message_id': id})
-          .timeout(const Duration(seconds: 15));
-
-      if (result != null) {
-        final updated = Map<String, dynamic>.from(result as Map);
-        setState(() {
-          final index = _inbox.indexWhere((m) => m['id'] == id);
-          if (index != -1) _inbox[index] = updated;
-        });
-        final unread = _inbox.where((m) => m['read_at'] == null).length;
-        widget.onUnreadCountChanged(unread);
-      }
-    } catch (_) {
-      // Silent — marking read is a background nicety, not worth
-      // interrupting the user with an error for.
-    }
-  }
-
-  void _copyCode(String code) {
-    Clipboard.setData(ClipboardData(text: code));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Code copied'),
-        backgroundColor: kZetraGreenDark,
-        behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: 2),
-      ),
-    );
-  }
-
-  String _timeAgo(String iso) {
-    final dt = DateTime.tryParse(iso);
-    if (dt == null) return '';
-    final diff = DateTime.now().toUtc().difference(dt.toUtc());
-    if (diff.inMinutes < 1) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    return '${diff.inDays}d ago';
-  }
-
-  void _openSearch() async {
-    final sent = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const SearchZetraMailScreen()),
-    );
-    if (sent == true) {
-      _fetchMessages();
-    }
-  }
-
-  void _openDetail(Map<String, dynamic> m, {required bool isSent}) {
-    if (!isSent && m['read_at'] == null) {
-      _markRead(m['id'] as String);
-    }
-    final code = m['code'] as String?;
-    showModalBottomSheet(
+  Future<void> _pickCountAndStart(BuildContext context, SubjectInfo subject) async {
+    final count = await showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                (m['from_app'] as String? ?? 'zetra').toUpperCase(),
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: kZetraGreenDark,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                m['subject'] as String? ?? '',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                _timeAgo(m['created_at'] as String? ?? ''),
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                m['body'] as String? ?? '',
-                style: const TextStyle(fontSize: 15, height: 1.5),
-              ),
-              if (code != null) ...[
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: kZetraGreen.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        code,
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'monospace',
-                          letterSpacing: 2,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.copy_outlined, color: kZetraGreenDark),
-                      onPressed: () => _copyCode(code),
-                      tooltip: 'Copy code',
-                    ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
+      backgroundColor: Colors.transparent,
+      builder: (_) => QuestionCountPickerSheet(subject: subject),
     );
-  }
+    if (count == null || !context.mounted) return;
 
-  Widget _messageList(List<Map<String, dynamic>> messages, {required bool isSent}) {
-    if (messages.isEmpty) {
-      return ListView(
-        children: [
-          const SizedBox(height: 100),
-          Icon(
-            isSent ? Icons.outbox_outlined : Icons.mail_outline,
-            size: 56,
-            color: Colors.grey.shade400,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            isSent ? 'No sent mail yet' : 'No mail yet',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 15),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            isSent
-                ? 'Messages you send will appear here.'
-                : 'Tap the search icon to find someone and send a message.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
-          ),
-        ],
-      );
-    }
+    final allQuestions = QuestionRepository.getForSubject(subject.name);
+    final shuffled = List<Question>.from(allQuestions)..shuffle();
+    final questions = (count == -1 || count >= shuffled.length) ? shuffled : shuffled.take(count).toList();
+    if (!context.mounted) return;
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        final m = messages[index];
-        final isUnread = !isSent && m['read_at'] == null;
-        final code = m['code'] as String?;
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: isUnread ? Border.all(color: kZetraGreen.withOpacity(0.4)) : null,
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(14),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(14),
-              onTap: () => _openDetail(m, isSent: isSent),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        if (isUnread)
-                          Container(
-                            width: 8,
-                            height: 8,
-                            margin: const EdgeInsets.only(right: 8),
-                            decoration: const BoxDecoration(color: kZetraGreen, shape: BoxShape.circle),
-                          ),
-                        Expanded(
-                          child: Text(
-                            (m['from_app'] as String? ?? 'zetra').toUpperCase(),
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: kZetraGreenDark,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          _timeAgo(m['created_at'] as String? ?? ''),
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      m['subject'] as String? ?? '',
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      m['body'] as String? ?? '',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
-                    ),
-                    if (code != null) ...[
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Icon(Icons.key_outlined, size: 16, color: Colors.grey.shade500),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Contains a code — tap to view',
-                            style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('ZetraMail'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: ToggleButtons(
-              isSelected: [_tab == 0, _tab == 1],
-              onPressed: (i) => setState(() => _tab = i),
-              borderRadius: BorderRadius.circular(10),
-              selectedColor: Colors.white,
-              fillColor: Colors.white24,
-              color: Colors.white70,
-              constraints: BoxConstraints(
-                minWidth: (MediaQuery.of(context).size.width - 32) / 2 - 4,
-                minHeight: 36,
-              ),
-              children: const [Text('Inbox'), Text('Sent')],
-            ),
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search),
-            tooltip: 'Find a ZetraMail account',
-            onPressed: _openSearch,
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: kZetraGreen,
-        onPressed: _openSearch,
-        tooltip: 'New message',
-        child: const Icon(Icons.edit_outlined, color: Colors.white),
-      ),
-      body: RefreshIndicator(
-        color: kZetraGreen,
-        onRefresh: _fetchMessages,
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: kZetraGreen))
-            : _failure != null
-                ? ListView(
-                    children: [
-                      const SizedBox(height: 80),
-                      Icon(
-                        _failure!.isNetworkError ? Icons.wifi_off : Icons.error_outline,
-                        size: 48,
-                        color: Colors.grey.shade400,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(_failure!.message, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700)),
-                      const SizedBox(height: 16),
-                      Center(child: ElevatedButton(onPressed: _fetchMessages, child: const Text('Retry'))),
-                    ],
-                  )
-                : (_tab == 0 ? _messageList(_inbox, isSent: false) : _messageList(_sent, isSent: true)),
-      ),
-    );
-  }
-}
-
-/// Search other Zetra ID holders by username or ZetraMail address,
-/// then tap a result to compose a message to them.
-class SearchZetraMailScreen extends StatefulWidget {
-  const SearchZetraMailScreen({super.key});
-
-  @override
-  State<SearchZetraMailScreen> createState() => _SearchZetraMailScreenState();
-}
-
-class _SearchZetraMailScreenState extends State<SearchZetraMailScreen> {
-  final _queryController = TextEditingController();
-  bool _isLoading = false;
-  ApiFailure? _failure;
-  List<Map<String, dynamic>> _results = [];
-  Timer? _debounce;
-
-  @override
-  void dispose() {
-    _queryController.dispose();
-    _debounce?.cancel();
-    super.dispose();
-  }
-
-  void _onQueryChanged(String value) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 400), () => _search(value));
-  }
-
-  Future<void> _search(String query) async {
-    final trimmed = query.trim();
-    if (trimmed.length < 2) {
-      setState(() {
-        _results = [];
-        _failure = null;
-        _isLoading = false;
-      });
-      return;
-    }
-
-    setState(() {
-      _isLoading = true;
-      _failure = null;
-    });
-
-    try {
-      final data = await supabase
-          .rpc('search_zetramail', params: {'p_query': trimmed})
-          .timeout(const Duration(seconds: 15));
-      setState(() => _results = List<Map<String, dynamic>>.from(data as List));
-    } on PostgrestException catch (_) {
-      setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
-    } on SocketException {
-      setState(() => _failure = ApiFailure('No internet connection.', isNetworkError: true));
-    } on TimeoutException {
-      setState(() => _failure = ApiFailure('The request timed out. Please try again.', isNetworkError: true));
-    } catch (e) {
-      setState(() => _failure = ApiFailure('Something went wrong. Please try again.'));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  void _openCompose(Map<String, dynamic> account) async {
-    final sent = await Navigator.of(context).push<bool>(
+    Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ComposeMailScreen(
-          recipientZetraMail: account['zetramail'] as String,
-          recipientUsername: account['username'] as String,
-        ),
+        builder: (_) => ExamInstructionsScreen(subject: subject, questions: questions),
       ),
     );
-    if (sent == true && mounted) {
-      Navigator.of(context).pop(true);
-    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final provider = context.watch<AppProvider>();
+    final stats = provider.stats;
+    final daily = provider.dailyChallenge;
+    provider.refreshDailyChallengeIfNeeded();
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Find a ZetraMail account')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _queryController,
-              autofocus: true,
-              onChanged: _onQueryChanged,
-              decoration: const InputDecoration(
-                labelText: 'Search by username or ZetraMail',
-                prefixIcon: Icon(Icons.search),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator(color: kZetraGreen))
-                  : _failure != null
-                      ? Center(
-                          child: Text(
-                            _failure!.message,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                        )
-                      : _results.isEmpty
-                          ? Center(
-                              child: Text(
-                                _queryController.text.trim().length < 2
-                                    ? 'Type at least 2 characters to search.'
-                                    : 'No matching ZetraMail account found.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.grey.shade600),
-                              ),
-                            )
-                          : ListView.separated(
-                              itemCount: _results.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
-                              itemBuilder: (context, index) {
-                                final r = _results[index];
-                                final displayName = (r['full_name'] as String?) ?? (r['username'] as String? ?? '');
-                                final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
-
-                                return Container(
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(14),
-                                    boxShadow: [
-                                      BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-                                    ],
-                                  ),
-                                  child: ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: CircleAvatar(
-                                      backgroundColor: kZetraGreen.withOpacity(0.1),
-                                      child: Text(
-                                        initial,
-                                        style: const TextStyle(color: kZetraGreenDark, fontWeight: FontWeight.bold),
-                                      ),
-                                    ),
-                                    title: Text(displayName),
-                                    subtitle: Text(r['zetramail'] as String? ?? ''),
-                                    trailing: const Icon(Icons.chevron_right, color: kZetraGreenDark),
-                                    onTap: () => _openCompose(r),
-                                  ),
-                                );
-                              },
-                            ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Compose and send a ZetraMail message to another Zetra ID holder.
-class ComposeMailScreen extends StatefulWidget {
-  final String recipientZetraMail;
-  final String recipientUsername;
-  const ComposeMailScreen({
-    super.key,
-    required this.recipientZetraMail,
-    required this.recipientUsername,
-  });
-
-  @override
-  State<ComposeMailScreen> createState() => _ComposeMailScreenState();
-}
-
-class _ComposeMailScreenState extends State<ComposeMailScreen> {
-  final _subjectController = TextEditingController();
-  final _bodyController = TextEditingController();
-  bool _isSending = false;
-  String? _errorMessage;
-
-  @override
-  void dispose() {
-    _subjectController.dispose();
-    _bodyController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _send() async {
-    final subject = _subjectController.text.trim();
-    final body = _bodyController.text.trim();
-
-    if (subject.isEmpty) {
-      setState(() => _errorMessage = 'Enter a subject.');
-      return;
-    }
-    if (body.isEmpty) {
-      setState(() => _errorMessage = 'Enter a message.');
-      return;
-    }
-
-    setState(() {
-      _isSending = true;
-      _errorMessage = null;
-    });
-
-    try {
-      await supabase.rpc('send_zetramail', params: {
-        'p_recipient_zetramail': widget.recipientZetraMail,
-        'p_subject': subject,
-        'p_body': body,
-      }).timeout(const Duration(seconds: 20));
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Sent to ${widget.recipientUsername}'),
-          backgroundColor: kZetraGreenDark,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      Navigator.of(context).pop(true);
-    } on PostgrestException catch (e) {
-      setState(() => _errorMessage = e.message.isNotEmpty ? e.message : 'Could not send this message. Please try again.');
-    } on SocketException {
-      setState(() => _errorMessage = 'No internet connection. Check your network and try again.');
-    } on TimeoutException {
-      setState(() => _errorMessage = 'Could not reach the server. Please try again.');
-    } catch (e) {
-      setState(() => _errorMessage = 'Something went wrong. Please try again.');
-    } finally {
-      if (mounted) setState(() => _isSending = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('New Message')),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: kZetraGreen.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(12),
-                ),
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                 child: Row(
                   children: [
-                    const Icon(Icons.person, color: kZetraGreenDark),
-                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: scheme.primaryContainer, borderRadius: BorderRadius.circular(14)),
+                      child: Icon(Icons.school_rounded, color: scheme.onPrimaryContainer),
+                    ),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(widget.recipientUsername, style: const TextStyle(fontWeight: FontWeight.w600)),
-                          Text(widget.recipientZetraMail, style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                          Text('NaijaLearn', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                          Text(
+                            profile != null ? 'Welcome, ${profile!.username}' : 'Choose a subject to practice',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
                         ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Toggle dark mode',
+                      onPressed: provider.toggleDarkMode,
+                      icon: Icon(provider.darkMode ? Icons.light_mode_rounded : Icons.dark_mode_rounded),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProfileScreen())),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(20)),
+                    child: Row(
+                      children: [
+                        _StatPill(icon: Icons.local_fire_department_rounded, color: Colors.deepOrange, value: '${stats.streak}', label: 'Streak'),
+                        _StatPill(icon: Icons.star_rounded, color: Colors.amber, value: '${stats.xp}', label: 'XP'),
+                        _StatPill(icon: Icons.military_tech_rounded, color: scheme.primary, value: '${stats.level}', label: 'Level'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(24),
+                    gradient: LinearGradient(
+                      colors: [scheme.primary, scheme.primary.withOpacity(0.75)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('CBT Practice Mode',
+                                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Simulate real exam conditions with a timer,\nquestion navigator and instant results.',
+                              style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 12.5, height: 1.4),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.bolt_rounded, color: Colors.white.withOpacity(0.85), size: 42),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.amber.withOpacity(0.5), width: 1.4),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(color: Colors.amber.withOpacity(0.15), borderRadius: BorderRadius.circular(14)),
+                        child: const Icon(Icons.calendar_today_rounded, color: Colors.amber),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Daily Challenge', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Text(
+                              daily == null
+                                  ? 'Loading...'
+                                  : (daily.completed
+                                      ? 'Completed today — ${daily.score}/${daily.questions.length} ✅'
+                                      : '${daily.questions.length} mixed questions waiting'),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      FilledButton(
+                        onPressed: daily == null || daily.completed
+                            ? null
+                            : () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => QuizScreen(
+                                      questions: daily.questions,
+                                      title: 'Daily Challenge',
+                                      onComplete: (score) {
+                                        context.read<AppProvider>().submitDailyChallenge(score);
+                                        Navigator.pop(context);
+                                      },
+                                    ),
+                                  ),
+                                ),
+                        child: const Text('Start'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            // --- Added: Daily Goal progress card ---
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                child: Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.flag_rounded, size: 20, color: scheme.primary),
+                          const SizedBox(width: 8),
+                          const Text('Daily Goal', style: TextStyle(fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: LinearProgressIndicator(
+                          value: provider.dailyGoalProgress,
+                          minHeight: 10,
+                          backgroundColor: scheme.surface,
+                          valueColor: AlwaysStoppedAnimation(provider.dailyGoalMet ? Colors.green : scheme.primary),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text('${provider.questionsToday} / ${provider.dailyGoalQuestions} questions today',
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                child: SizedBox(
+                  height: 44,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      _QuickActionChip(icon: Icons.leaderboard_rounded, label: 'Leaderboard', onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LeaderboardScreen()))),
+                      const SizedBox(width: 10),
+                      _QuickActionChip(icon: Icons.school_rounded, label: 'Mock Exam', onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MockExamScreen()))),
+                      const SizedBox(width: 10),
+                      _QuickActionChip(icon: Icons.bar_chart_rounded, label: 'Analytics', onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AnalyticsScreen()))),
+                      const SizedBox(width: 10),
+                      _QuickActionChip(icon: Icons.person_rounded, label: 'Profile', onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProfileScreen()))),
+                      // --- Added: Study Timer and Weekly Stats quick actions ---
+                      const SizedBox(width: 10),
+                      _QuickActionChip(icon: Icons.timer_rounded, label: 'Study Timer', onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StudyTimerScreen()))),
+                      const SizedBox(width: 10),
+                      _QuickActionChip(icon: Icons.calendar_view_week_rounded, label: 'Weekly Stats', onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WeeklyStatsScreen()))),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 14,
+                  crossAxisSpacing: 14,
+                  childAspectRatio: 1.15,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final subject = kSubjects[index];
+                    final count = QuestionRepository.getForSubject(subject.name).length;
+                    return SubjectCard(
+                      subject: subject,
+                      questionCount: count,
+                      onTap: () => _pickCountAndStart(context, subject),
+                    );
+                  },
+                  childCount: kSubjects.length,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatPill extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String value;
+  final String label;
+  const _StatPill({required this.icon, required this.color, required this.value, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(height: 4),
+          Text(value, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: color)),
+          Text(label, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuickActionChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _QuickActionChip({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(22),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              Icon(icon, size: 18, color: scheme.primary),
+              const SizedBox(width: 8),
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SubjectCard extends StatelessWidget {
+  final SubjectInfo subject;
+  final int questionCount;
+  final VoidCallback onTap;
+  const SubjectCard({super.key, required this.subject, required this.questionCount, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
+      borderRadius: BorderRadius.circular(20),
+      elevation: 1,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: subject.color.withOpacity(0.15), borderRadius: BorderRadius.circular(14)),
+                child: Icon(subject.icon, color: subject.color, size: 26),
+              ),
+              const Spacer(),
+              Text(subject.name, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              Text('$questionCount questions',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// =========================================================================
+/// QUESTION COUNT PICKER
+/// =========================================================================
+
+class QuestionCountPickerSheet extends StatelessWidget {
+  final SubjectInfo subject;
+  const QuestionCountPickerSheet({super.key, required this.subject});
+
+  static const List<int> _counts = [10, 20, 40, 60];
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final total = QuestionRepository.getForSubject(subject.name).length;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.5,
+      minChildSize: 0.35,
+      maxChildSize: 0.75,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(color: scheme.surface, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(color: scheme.onSurfaceVariant.withOpacity(0.4), borderRadius: BorderRadius.circular(4)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Row(
+                  children: [
+                    Icon(subject.icon, color: subject.color),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text('${subject.name} — Select Number of Questions',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                  children: [
+                    ..._counts.map((count) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Material(
+                          color: scheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(14),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () => Navigator.of(context).pop(count),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                              child: Row(
+                                children: [
+                                  Text('$count questions', style: const TextStyle(fontWeight: FontWeight.w600)),
+                                  const Spacer(),
+                                  const Icon(Icons.chevron_right_rounded),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                    Material(
+                      color: subject.color.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(14),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => Navigator.of(context).pop(-1),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                          child: Row(
+                            children: [
+                              Text('All Available ($total questions)',
+                                  style: TextStyle(fontWeight: FontWeight.w600, color: subject.color)),
+                              const Spacer(),
+                              Icon(Icons.chevron_right_rounded, color: subject.color),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 18),
-              TextField(
-                controller: _subjectController,
-                decoration: const InputDecoration(labelText: 'Subject', prefixIcon: Icon(Icons.subject)),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _bodyController,
-                maxLines: 6,
-                decoration: const InputDecoration(
-                  labelText: 'Message',
-                  alignLabelWithHint: true,
-                  prefixIcon: Icon(Icons.message_outlined),
-                ),
-              ),
-              const SizedBox(height: 20),
-              if (_errorMessage != null) ...[
-                buildErrorBanner(_errorMessage!),
-                const SizedBox(height: 16),
-              ],
-              ElevatedButton(
-                onPressed: _isSending ? null : _send,
-                child: _isSending
-                    ? const SizedBox(
-                        height: 22,
-                        width: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
-                      )
-                    : const Text('Send'),
-              ),
             ],
           ),
+        );
+      },
+    );
+  }
+}
+
+/// =========================================================================
+/// EXAM INSTRUCTIONS
+/// =========================================================================
+
+class ExamInstructionsScreen extends StatelessWidget {
+  final SubjectInfo subject;
+  final List<Question> questions;
+  const ExamInstructionsScreen({super.key, required this.subject, required this.questions});
+
+  static const int durationMinutes = 20;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Exam Instructions')),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: subject.color.withOpacity(0.15), borderRadius: BorderRadius.circular(16)),
+                  child: Icon(subject.icon, color: subject.color, size: 32),
+                ),
+                const SizedBox(width: 14),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(subject.name, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                    Text('Practice Set', style: Theme.of(context).textTheme.bodyMedium),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 28),
+            _InfoTile(icon: Icons.quiz_rounded, label: 'Questions', value: '${questions.length}'),
+            _InfoTile(icon: Icons.timer_rounded, label: 'Duration', value: '$durationMinutes minutes'),
+            _InfoTile(icon: Icons.check_circle_rounded, label: 'Question type', value: 'Multiple choice (4 options)'),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(16)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Text('Instructions', style: TextStyle(fontWeight: FontWeight.bold)),
+                  SizedBox(height: 8),
+                  Text('• Answer all questions before time runs out.\n'
+                      '• You may skip a question and return to it later.\n'
+                      '• Use the question navigator to jump to any question.\n'
+                      '• The exam auto-submits when the timer reaches zero.\n'
+                      '• Completing this exam also earns XP toward your level.'),
+                ],
+              ),
+            ),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('Start Exam', style: TextStyle(fontSize: 16)),
+                onPressed: questions.isEmpty
+                    ? null
+                    : () {
+                        Navigator.of(context).pushReplacement(
+                          MaterialPageRoute(
+                            builder: (_) => ExamScreen(
+                              subject: subject,
+                              questions: questions,
+                              durationMinutes: durationMinutes,
+                            ),
+                          ),
+                        );
+                      },
+              ),
+            ),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+class _InfoTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _InfoTile({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: scheme.primary),
+          const SizedBox(width: 12),
+          Text(label, style: Theme.of(context).textTheme.bodyMedium),
+          const Spacer(),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+}
+
+/// =========================================================================
+/// EXAM SCREEN (CBT interface)
+/// =========================================================================
+
+enum QuestionStatus { unanswered, answered, skipped }
+
+class ExamScreen extends StatefulWidget {
+  final SubjectInfo subject;
+  final List<Question> questions;
+  final int durationMinutes;
+
+  const ExamScreen({
+    super.key,
+    required this.subject,
+    required this.questions,
+    required this.durationMinutes,
+  });
+
+  @override
+  State<ExamScreen> createState() => _ExamScreenState();
+}
+
+class _ExamScreenState extends State<ExamScreen> {
+  late List<int?> _selectedAnswers;
+  late List<QuestionStatus> _statuses;
+  int _currentIndex = 0;
+  late int _remainingSeconds;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedAnswers = List<int?>.filled(widget.questions.length, null);
+    _statuses = List<QuestionStatus>.filled(widget.questions.length, QuestionStatus.unanswered);
+    _remainingSeconds = widget.durationMinutes * 60;
+    _startTimer();
+  }
+
+  void _startTimer() {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_remainingSeconds <= 1) {
+        timer.cancel();
+        setState(() => _remainingSeconds = 0);
+        _submitExam();
+      } else {
+        setState(() => _remainingSeconds--);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String get _formattedTime {
+    final m = (_remainingSeconds ~/ 60).toString().padLeft(2, '0');
+    final s = (_remainingSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  void _selectOption(int optionIndex) {
+    setState(() {
+      _selectedAnswers[_currentIndex] = optionIndex;
+      _statuses[_currentIndex] = QuestionStatus.answered;
+    });
+  }
+
+  void _goTo(int index) {
+    if (index < 0 || index >= widget.questions.length) return;
+    setState(() => _currentIndex = index);
+  }
+
+  void _skipQuestion() {
+    setState(() {
+      if (_statuses[_currentIndex] == QuestionStatus.unanswered) {
+        _statuses[_currentIndex] = QuestionStatus.skipped;
+      }
+    });
+    if (_currentIndex < widget.questions.length - 1) {
+      _goTo(_currentIndex + 1);
+    }
+  }
+
+  Future<void> _confirmSubmit() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Submit Exam?'),
+        content: Text(
+          'You have answered ${_selectedAnswers.where((a) => a != null).length} of '
+          '${widget.questions.length} questions. Submit now?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Submit')),
+        ],
+      ),
+    );
+    if (confirmed == true) _submitExam();
+  }
+
+  void _submitExam() {
+    _timer?.cancel();
+    int correct = 0;
+    for (int i = 0; i < widget.questions.length; i++) {
+      if (_selectedAnswers[i] != null && _selectedAnswers[i] == widget.questions[i].correctIndex) {
+        correct++;
+      }
+    }
+    final skipped = _statuses.where((s) => s == QuestionStatus.skipped).length;
+    final unanswered = _selectedAnswers.where((a) => a == null).length;
+
+    final provider = context.read<AppProvider>();
+    provider.recordAnswer(widget.subject.name, correct, widget.questions.length);
+    provider.addXP(correct * 10);
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ResultsScreen(
+          subject: widget.subject,
+          questions: widget.questions,
+          selectedAnswers: _selectedAnswers,
+          correctCount: correct,
+          skippedCount: skipped,
+          unansweredCount: unanswered,
+        ),
+      ),
+    );
+  }
+
+  void _openNavigator() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => QuestionNavigatorSheet(
+        totalQuestions: widget.questions.length,
+        statuses: _statuses,
+        currentIndex: _currentIndex,
+        onSelect: (index) {
+          Navigator.pop(context);
+          _goTo(index);
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final question = widget.questions[_currentIndex];
+    final answeredCount = _selectedAnswers.where((a) => a != null).length;
+    final progress = (answeredCount) / widget.questions.length;
+    final isLowTime = _remainingSeconds <= 60;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.subject.name),
+        actions: [
+          Container(
+            margin: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: isLowTime ? scheme.errorContainer : scheme.primaryContainer,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.timer_rounded, size: 18, color: isLowTime ? scheme.onErrorContainer : scheme.onPrimaryContainer),
+                const SizedBox(width: 6),
+                Text(_formattedTime,
+                    style: TextStyle(fontWeight: FontWeight.bold, color: isLowTime ? scheme.onErrorContainer : scheme.onPrimaryContainer)),
+              ],
+            ),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Column(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(value: progress, minHeight: 8, backgroundColor: scheme.surfaceContainerHighest),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Question ${_currentIndex + 1} of ${widget.questions.length}', style: Theme.of(context).textTheme.bodySmall),
+                    TextButton.icon(
+                      onPressed: _openNavigator,
+                      icon: const Icon(Icons.grid_view_rounded, size: 18),
+                      label: const Text('Navigator'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 250),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(begin: const Offset(0.05, 0), end: Offset.zero).animate(animation),
+                  child: child,
+                ),
+              ),
+              child: SingleChildScrollView(
+                key: ValueKey(_currentIndex),
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(18)),
+                      child: Text(question.questionText, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, height: 1.4)),
+                    ),
+                    const SizedBox(height: 18),
+                    ...List.generate(question.options.length, (i) {
+                      final isSelected = _selectedAnswers[_currentIndex] == i;
+                      final letter = String.fromCharCode(65 + i);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Material(
+                          color: isSelected ? scheme.primaryContainer : scheme.surface,
+                          borderRadius: BorderRadius.circular(16),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: () => _selectOption(i),
+                            child: Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: isSelected ? scheme.primary : scheme.outlineVariant, width: isSelected ? 2 : 1),
+                              ),
+                              child: Row(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 14,
+                                    backgroundColor: isSelected ? scheme.primary : scheme.surfaceContainerHighest,
+                                    child: Text(letter,
+                                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: isSelected ? scheme.onPrimary : scheme.onSurfaceVariant)),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Expanded(child: Text(question.options[i], style: const TextStyle(fontSize: 15))),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _currentIndex > 0 ? () => _goTo(_currentIndex - 1) : null,
+                      icon: const Icon(Icons.chevron_left_rounded),
+                      label: const Text('Previous'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _skipQuestion,
+                      icon: const Icon(Icons.skip_next_rounded),
+                      label: const Text('Skip'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _currentIndex == widget.questions.length - 1
+                        ? FilledButton.icon(onPressed: _confirmSubmit, icon: const Icon(Icons.check_rounded), label: const Text('Submit'))
+                        : FilledButton.icon(onPressed: () => _goTo(_currentIndex + 1), icon: const Icon(Icons.chevron_right_rounded), label: const Text('Next')),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// =========================================================================
+/// QUESTION NAVIGATOR
+/// =========================================================================
+
+class QuestionNavigatorSheet extends StatelessWidget {
+  final int totalQuestions;
+  final List<QuestionStatus> statuses;
+  final int currentIndex;
+  final ValueChanged<int> onSelect;
+
+  const QuestionNavigatorSheet({
+    super.key,
+    required this.totalQuestions,
+    required this.statuses,
+    required this.currentIndex,
+    required this.onSelect,
+  });
+
+  Color _colorFor(BuildContext context, QuestionStatus status, bool isCurrent) {
+    final scheme = Theme.of(context).colorScheme;
+    if (isCurrent) return scheme.primary;
+    switch (status) {
+      case QuestionStatus.answered:
+        return Colors.green;
+      case QuestionStatus.skipped:
+        return Colors.orange;
+      case QuestionStatus.unanswered:
+        return scheme.surfaceContainerHighest;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
+      decoration: BoxDecoration(color: scheme.surface, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Question Navigator', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                _LegendDot(color: Colors.green, label: 'Answered'),
+                _LegendDot(color: Colors.orange, label: 'Skipped'),
+                _LegendDot(color: scheme.surfaceContainerHighest, label: 'Unanswered', border: true),
+                _LegendDot(color: scheme.primary, label: 'Current'),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Flexible(
+              child: GridView.builder(
+                shrinkWrap: true,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 5, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1),
+                itemCount: totalQuestions,
+                itemBuilder: (context, index) {
+                  final isCurrent = index == currentIndex;
+                  final color = _colorFor(context, statuses[index], isCurrent);
+                  final isFilled = isCurrent || statuses[index] != QuestionStatus.unanswered;
+                  return Material(
+                    color: isFilled ? color : Colors.transparent,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: color, width: isFilled ? 0 : 1.4)),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => onSelect(index),
+                      child: Center(
+                        child: Text('${index + 1}', style: TextStyle(fontWeight: FontWeight.bold, color: isFilled ? Colors.white : scheme.onSurface)),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+  final bool border;
+  const _LegendDot({required this.color, required this.label, this.border = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: border ? Border.all(color: Theme.of(context).colorScheme.outline) : null),
+        ),
+        const SizedBox(width: 6),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    );
+  }
+}
+
+/// =========================================================================
+/// RESULTS SCREEN
+/// =========================================================================
+
+class ResultsScreen extends StatelessWidget {
+  final SubjectInfo subject;
+  final List<Question> questions;
+  final List<int?> selectedAnswers;
+  final int correctCount;
+  final int skippedCount;
+  final int unansweredCount;
+
+  const ResultsScreen({
+    super.key,
+    required this.subject,
+    required this.questions,
+    required this.selectedAnswers,
+    required this.correctCount,
+    required this.skippedCount,
+    required this.unansweredCount,
+  });
+
+  double get _percentage => (correctCount / questions.length) * 100;
+
+  String get _grade {
+    final p = _percentage;
+    if (p >= 75) return 'A';
+    if (p >= 60) return 'B';
+    if (p >= 50) return 'C';
+    if (p >= 40) return 'D';
+    return 'F';
+  }
+
+  String get _gradeLabel {
+    switch (_grade) {
+      case 'A':
+        return 'Excellent';
+      case 'B':
+        return 'Very Good';
+      case 'C':
+        return 'Good';
+      case 'D':
+        return 'Pass';
+      default:
+        return 'Needs Improvement';
+    }
+  }
+
+  Color _gradeColor(BuildContext context) {
+    switch (_grade) {
+      case 'A':
+        return Colors.green;
+      case 'B':
+        return Colors.lightGreen;
+      case 'C':
+        return Colors.amber;
+      case 'D':
+        return Colors.orange;
+      default:
+        return Theme.of(context).colorScheme.error;
+    }
+  }
+
+  String get _analysis {
+    final p = _percentage;
+    if (p >= 75) {
+      return "Outstanding performance! You've demonstrated a strong grasp of ${subject.name}. Keep practising to maintain this level.";
+    } else if (p >= 50) {
+      return "Solid effort. You understand most of the ${subject.name} concepts, but reviewing the questions you missed will help you improve further.";
+    } else {
+      return "There's room for improvement. Focus on reviewing your wrong answers and revisit the core topics in ${subject.name} before your next attempt.";
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final actualWrong = questions.length - correctCount - unansweredCount;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Results'), automaticallyImplyLeading: false),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: _percentage / 100),
+              duration: const Duration(milliseconds: 900),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, child) {
+                return SizedBox(
+                  width: 180,
+                  height: 180,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      SizedBox(
+                        width: 180,
+                        height: 180,
+                        child: CircularProgressIndicator(
+                          value: value,
+                          strokeWidth: 12,
+                          backgroundColor: scheme.surfaceContainerHighest,
+                          valueColor: AlwaysStoppedAnimation(_gradeColor(context)),
+                        ),
+                      ),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('${(value * 100).toStringAsFixed(0)}%', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
+                          Text('Grade $_grade', style: TextStyle(color: _gradeColor(context), fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+            Text(_gradeLabel, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text('${subject.name} • Practice Set', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(color: Colors.amber.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
+              child: Text('+${correctCount * 10} XP earned', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                _StatCard(label: 'Correct', value: '$correctCount', color: Colors.green),
+                const SizedBox(width: 10),
+                _StatCard(label: 'Wrong', value: '$actualWrong', color: Colors.red),
+                const SizedBox(width: 10),
+                _StatCard(label: 'Skipped', value: '$unansweredCount', color: Colors.orange),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(18)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.insights_rounded, color: scheme.primary),
+                      const SizedBox(width: 8),
+                      const Text('Performance Analysis', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(_analysis, style: const TextStyle(height: 1.5)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.rate_review_rounded),
+                label: const Text('Review Answers'),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => ReviewScreen(questions: questions, selectedAnswers: selectedAnswers)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.replay_rounded),
+                label: const Text('Retake Exam'),
+                onPressed: () => Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(builder: (_) => ExamInstructionsScreen(subject: subject, questions: questions)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: TextButton.icon(
+                icon: const Icon(Icons.home_rounded),
+                label: const Text('Back to Home'),
+                onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  const _StatCard({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(16)),
+        child: Column(
+          children: [
+            Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color)),
+            const SizedBox(height: 2),
+            Text(label, style: TextStyle(fontSize: 12, color: color)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// =========================================================================
+/// REVIEW SCREEN
+/// =========================================================================
+
+class ReviewScreen extends StatelessWidget {
+  final List<Question> questions;
+  final List<int?> selectedAnswers;
+  const ReviewScreen({super.key, required this.questions, required this.selectedAnswers});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Review Answers')),
+      body: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: questions.length,
+        itemBuilder: (context, index) {
+          final question = questions[index];
+          final selected = selectedAnswers[index];
+          final isCorrect = selected == question.correctIndex;
+          final wasAnswered = selected != null;
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: !wasAnswered ? scheme.outlineVariant : (isCorrect ? Colors.green : Colors.red), width: 1.4),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(color: scheme.primaryContainer, borderRadius: BorderRadius.circular(10)),
+                      child: Text('Q${index + 1}', style: TextStyle(fontWeight: FontWeight.bold, color: scheme.onPrimaryContainer)),
+                    ),
+                    const Spacer(),
+                    Icon(
+                      !wasAnswered ? Icons.remove_circle_outline_rounded : (isCorrect ? Icons.check_circle_rounded : Icons.cancel_rounded),
+                      color: !wasAnswered ? Colors.orange : (isCorrect ? Colors.green : Colors.red),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      !wasAnswered ? 'Skipped' : (isCorrect ? 'Correct' : 'Wrong'),
+                      style: TextStyle(fontWeight: FontWeight.w600, color: !wasAnswered ? Colors.orange : (isCorrect ? Colors.green : Colors.red)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(question.questionText, style: const TextStyle(fontWeight: FontWeight.w600, height: 1.4)),
+                const SizedBox(height: 10),
+                ...List.generate(question.options.length, (i) {
+                  final isCorrectOption = i == question.correctIndex;
+                  final isSelectedOption = i == selected;
+                  Color? bg;
+                  if (isCorrectOption) {
+                    bg = Colors.green.withOpacity(0.15);
+                  } else if (isSelectedOption && !isCorrectOption) {
+                    bg = Colors.red.withOpacity(0.15);
+                  }
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: bg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: isCorrectOption ? Colors.green : (isSelectedOption ? Colors.red : scheme.outlineVariant)),
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(radius: 12, backgroundColor: scheme.surface, child: Text(String.fromCharCode(65 + i), style: const TextStyle(fontSize: 12))),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text(question.options[i], style: const TextStyle(fontSize: 13.5))),
+                        if (isCorrectOption) const Icon(Icons.check_rounded, color: Colors.green, size: 18),
+                        if (isSelectedOption && !isCorrectOption) const Icon(Icons.close_rounded, color: Colors.red, size: 18),
+                      ],
+                    ),
+                  );
+                }),
+                if (question.explanation.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: scheme.primaryContainer.withOpacity(0.4), borderRadius: BorderRadius.circular(12)),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.lightbulb_outline_rounded, size: 18, color: scheme.primary),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(question.explanation, style: const TextStyle(fontSize: 12.5, fontStyle: FontStyle.italic))),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+        },
       ),
     );
   }
