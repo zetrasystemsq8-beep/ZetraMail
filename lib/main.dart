@@ -1079,9 +1079,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// ZetraMail inbox: verification codes and messages sent from
-/// other Zetra apps, from Zetra itself, and from other users.
-/// Also supports viewing messages you've sent.
+/// ZetraMail: Inbox, Archived, and Sent — with archiving, deletion
+/// (with undo), OTP detection, and read tracking.
 class MessagesScreen extends StatefulWidget {
   final void Function(int unreadCount) onUnreadCountChanged;
   const MessagesScreen({super.key, required this.onUnreadCountChanged});
@@ -1094,13 +1093,14 @@ class _MessagesScreenState extends State<MessagesScreen> {
   bool _isLoading = true;
   ApiFailure? _failure;
   List<Map<String, dynamic>> _inbox = [];
+  List<Map<String, dynamic>> _archived = [];
   List<Map<String, dynamic>> _sent = [];
-  int _tab = 0; // 0 = Inbox, 1 = Sent
+  int _tab = 0; // 0 = Inbox, 1 = Archived, 2 = Sent
   String? _appFilter;
 
   Map<String, dynamic>? _pendingDeleteItem;
   int? _pendingDeleteIndex;
-  bool _pendingDeleteIsSent = false;
+  String _pendingDeleteFrom = 'inbox'; // 'inbox' | 'archived' | 'sent'
   Timer? _pendingDeleteTimer;
 
   @override
@@ -1131,25 +1131,37 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
       final inboxData = await supabase
           .from('messages')
-          .select('id, from_app, subject, body, code, read_at, created_at')
+          .select('id, from_app, subject, body, code, read_at, created_at, archived_at')
           .eq('user_id', userId)
           .filter('deleted_at', 'is', null)
+          .filter('archived_at', 'is', null)
           .order('created_at', ascending: false)
+          .timeout(const Duration(seconds: 20));
+
+      final archivedData = await supabase
+          .from('messages')
+          .select('id, from_app, subject, body, code, read_at, created_at, archived_at')
+          .eq('user_id', userId)
+          .filter('deleted_at', 'is', null)
+          .not('archived_at', 'is', null)
+          .order('archived_at', ascending: false)
           .timeout(const Duration(seconds: 20));
 
       final sentData = await supabase
           .from('messages')
-          .select('id, from_app, subject, body, code, read_at, created_at')
+          .select('id, from_app, subject, body, code, read_at, created_at, archived_at')
           .eq('sender_id', userId)
           .filter('deleted_at', 'is', null)
           .order('created_at', ascending: false)
           .timeout(const Duration(seconds: 20));
 
       final inbox = List<Map<String, dynamic>>.from(inboxData as List);
+      final archived = List<Map<String, dynamic>>.from(archivedData as List);
       final sent = List<Map<String, dynamic>>.from(sentData as List);
 
       setState(() {
         _inbox = inbox;
+        _archived = archived;
         _sent = sent;
       });
 
@@ -1207,8 +1219,68 @@ class _MessagesScreenState extends State<MessagesScreen> {
     }
   }
 
-  void _deleteMessage(Map<String, dynamic> m, {required bool isSent}) {
-    final list = isSent ? _sent : _inbox;
+  void _archiveMessage(Map<String, dynamic> m) {
+    setState(() {
+      _inbox.remove(m);
+      m['archived_at'] = DateTime.now().toUtc().toIso8601String();
+      _archived.insert(0, m);
+      final unread = _inbox.where((x) => x['read_at'] == null).length;
+      widget.onUnreadCountChanged(unread);
+    });
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Message archived'),
+        backgroundColor: kZetraGreenDark,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 2),
+      ),
+    );
+
+    _persistArchive(m['id'] as String);
+  }
+
+  Future<void> _persistArchive(String id) async {
+    try {
+      await supabase.rpc('archive_message', params: {'message_id': id}).timeout(const Duration(seconds: 15));
+    } catch (_) {
+      // Best effort — a manual refresh will resync if this failed.
+    }
+  }
+
+  void _unarchiveMessage(Map<String, dynamic> m) {
+    setState(() {
+      _archived.remove(m);
+      m['archived_at'] = null;
+      _inbox.insert(0, m);
+      final unread = _inbox.where((x) => x['read_at'] == null).length;
+      widget.onUnreadCountChanged(unread);
+    });
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Moved back to inbox'),
+        backgroundColor: kZetraGreenDark,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 2),
+      ),
+    );
+
+    _persistUnarchive(m['id'] as String);
+  }
+
+  Future<void> _persistUnarchive(String id) async {
+    try {
+      await supabase.rpc('unarchive_message', params: {'message_id': id}).timeout(const Duration(seconds: 15));
+    } catch (_) {
+      // Best effort — a manual refresh will resync if this failed.
+    }
+  }
+
+  void _deleteMessage(Map<String, dynamic> m, {required String from}) {
+    final list = from == 'archived' ? _archived : (from == 'sent' ? _sent : _inbox);
     final index = list.indexOf(m);
     if (index == -1) return;
 
@@ -1217,7 +1289,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
     setState(() {
       list.removeAt(index);
-      if (!isSent) {
+      if (from == 'inbox') {
         final unread = _inbox.where((x) => x['read_at'] == null).length;
         widget.onUnreadCountChanged(unread);
       }
@@ -1225,7 +1297,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
     _pendingDeleteItem = m;
     _pendingDeleteIndex = index;
-    _pendingDeleteIsSent = isSent;
+    _pendingDeleteFrom = from;
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1249,14 +1321,14 @@ class _MessagesScreenState extends State<MessagesScreen> {
     if (_pendingDeleteItem == null) return;
     _pendingDeleteTimer?.cancel();
     final item = _pendingDeleteItem!;
-    final isSent = _pendingDeleteIsSent;
+    final from = _pendingDeleteFrom;
     final index = _pendingDeleteIndex ?? 0;
     _pendingDeleteItem = null;
 
-    final list = isSent ? _sent : _inbox;
+    final list = from == 'archived' ? _archived : (from == 'sent' ? _sent : _inbox);
     setState(() {
       list.insert(index.clamp(0, list.length), item);
-      if (!isSent) {
+      if (from == 'inbox') {
         final unread = _inbox.where((x) => x['read_at'] == null).length;
         widget.onUnreadCountChanged(unread);
       }
@@ -1297,15 +1369,21 @@ class _MessagesScreenState extends State<MessagesScreen> {
     }
   }
 
-  void _openDetail(Map<String, dynamic> m, {required bool isSent}) async {
-    if (!isSent && m['read_at'] == null) {
+  void _openDetail(Map<String, dynamic> m, {required String from}) async {
+    if (from == 'inbox' && m['read_at'] == null) {
       _markRead(m['id'] as String);
     }
     final action = await Navigator.of(context).push<String>(
-      MaterialPageRoute(builder: (_) => MessageDetailScreen(message: m, isSent: isSent)),
+      MaterialPageRoute(
+        builder: (_) => MessageDetailScreen(message: m, from: from),
+      ),
     );
     if (action == 'delete') {
-      _deleteMessage(m, isSent: isSent);
+      _deleteMessage(m, from: from);
+    } else if (action == 'archive') {
+      _archiveMessage(m);
+    } else if (action == 'unarchive') {
+      _unarchiveMessage(m);
     }
   }
 
@@ -1353,30 +1431,30 @@ class _MessagesScreenState extends State<MessagesScreen> {
     );
   }
 
-  Widget _messageList(List<Map<String, dynamic>> messages, {required bool isSent}) {
+  Widget _messageList(List<Map<String, dynamic>> messages, {required String from}) {
+    final isInbox = from == 'inbox';
+    final isArchived = from == 'archived';
+    final isSent = from == 'sent';
+
     if (messages.isEmpty) {
+      final icon = isSent
+          ? Icons.outbox_outlined
+          : (isArchived ? Icons.archive_outlined : Icons.mail_outline);
+      final title = isSent ? 'No sent mail yet' : (isArchived ? 'No archived mail' : 'No mail yet');
+      final subtitle = isSent
+          ? 'Messages you send will appear here.'
+          : (isArchived
+              ? 'Swipe right on a message in your inbox to archive it.'
+              : 'Tap the search icon to find someone and send a message. Swipe left to delete, right to archive.');
+
       return ListView(
         children: [
           const SizedBox(height: 100),
-          Icon(
-            isSent ? Icons.outbox_outlined : Icons.mail_outline,
-            size: 56,
-            color: Colors.grey.shade400,
-          ),
+          Icon(icon, size: 56, color: Colors.grey.shade400),
           const SizedBox(height: 12),
-          Text(
-            isSent ? 'No sent mail yet' : 'No mail yet',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 15),
-          ),
+          Text(title, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade600, fontSize: 15)),
           const SizedBox(height: 4),
-          Text(
-            isSent
-                ? 'Messages you send will appear here.'
-                : 'Tap the search icon to find someone and send a message. Swipe left on any message to delete it.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
-          ),
+          Text(subtitle, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
         ],
       );
     }
@@ -1386,7 +1464,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
       itemCount: messages.length,
       itemBuilder: (context, index) {
         final m = messages[index];
-        final isUnread = !isSent && m['read_at'] == null;
+        final isUnread = isInbox && m['read_at'] == null;
         final body = m['body'] as String? ?? '';
         final explicitCode = m['code'] as String?;
         final codes = {
@@ -1394,101 +1472,142 @@ class _MessagesScreenState extends State<MessagesScreen> {
           ...extractOtpCodes(body),
         }.toList();
 
-        return Dismissible(
-          key: ValueKey(m['id']),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(
-              color: Colors.red.shade400,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: const Icon(Icons.delete_outline, color: Colors.white),
+        final card = Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(14),
+            border: isUnread ? Border.all(color: kZetraGreen.withOpacity(0.4)) : null,
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+            ],
           ),
-          onDismissed: (_) => _deleteMessage(m, isSent: isSent),
-          child: Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
               borderRadius: BorderRadius.circular(14),
-              border: isUnread ? Border.all(color: kZetraGreen.withOpacity(0.4)) : null,
-              boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-              ],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              borderRadius: BorderRadius.circular(14),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () => _openDetail(m, isSent: isSent),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          if (isUnread)
-                            Container(
-                              width: 8,
-                              height: 8,
-                              margin: const EdgeInsets.only(right: 8),
-                              decoration: const BoxDecoration(color: kZetraGreen, shape: BoxShape.circle),
-                            ),
-                          Expanded(
-                            child: Text(
-                              (m['from_app'] as String? ?? 'zetra').toUpperCase(),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: kZetraGreenDark,
-                                letterSpacing: 0.5,
-                              ),
+              onTap: () => _openDetail(m, from: from),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        if (isUnread)
+                          Container(
+                            width: 8,
+                            height: 8,
+                            margin: const EdgeInsets.only(right: 8),
+                            decoration: const BoxDecoration(color: kZetraGreen, shape: BoxShape.circle),
+                          ),
+                        Expanded(
+                          child: Text(
+                            (m['from_app'] as String? ?? 'zetra').toUpperCase(),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: kZetraGreenDark,
+                              letterSpacing: 0.5,
                             ),
                           ),
-                          Text(
-                            _timeAgo(m['created_at'] as String? ?? ''),
-                            style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        m['subject'] as String? ?? '',
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        body,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
-                      ),
-                      if (codes.isNotEmpty) ...[
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: codes.map((c) => buildOtpChip(context, c)).toList(),
+                        ),
+                        Text(
+                          _timeAgo(m['created_at'] as String? ?? ''),
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      m['subject'] as String? ?? '',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      body,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
+                    ),
+                    if (codes.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: codes.map((c) => buildOtpChip(context, c)).toList(),
+                      ),
                     ],
-                  ),
+                  ],
                 ),
               ),
             ),
           ),
         );
+
+        if (isSent) {
+          // Sent mail: swipe left to delete only.
+          return Dismissible(
+            key: ValueKey(m['id']),
+            direction: DismissDirection.endToStart,
+            background: _swipeBackground(alignRight: true, icon: Icons.delete_outline, color: Colors.red.shade400),
+            onDismissed: (_) => _deleteMessage(m, from: from),
+            child: card,
+          );
+        }
+
+        if (isArchived) {
+          // Archived: swipe right to unarchive, swipe left to delete forever.
+          return Dismissible(
+            key: ValueKey(m['id']),
+            direction: DismissDirection.horizontal,
+            background: _swipeBackground(alignRight: false, icon: Icons.unarchive_outlined, color: kZetraGreen),
+            secondaryBackground: _swipeBackground(alignRight: true, icon: Icons.delete_outline, color: Colors.red.shade400),
+            onDismissed: (direction) {
+              if (direction == DismissDirection.startToEnd) {
+                _unarchiveMessage(m);
+              } else {
+                _deleteMessage(m, from: from);
+              }
+            },
+            child: card,
+          );
+        }
+
+        // Inbox: swipe right to archive, swipe left to delete.
+        return Dismissible(
+          key: ValueKey(m['id']),
+          direction: DismissDirection.horizontal,
+          background: _swipeBackground(alignRight: false, icon: Icons.archive_outlined, color: kZetraGreen),
+          secondaryBackground: _swipeBackground(alignRight: true, icon: Icons.delete_outline, color: Colors.red.shade400),
+          onDismissed: (direction) {
+            if (direction == DismissDirection.startToEnd) {
+              _archiveMessage(m);
+            } else {
+              _deleteMessage(m, from: from);
+            }
+          },
+          child: card,
+        );
       },
+    );
+  }
+
+  Widget _swipeBackground({required bool alignRight, required IconData icon, required Color color}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(14)),
+      alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Icon(icon, color: Colors.white),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final unreadCount = _inbox.where((m) => m['read_at'] == null).length;
+    final currentFrom = _tab == 0 ? 'inbox' : (_tab == 1 ? 'archived' : 'sent');
     return Scaffold(
       appBar: AppBar(
         title: const Text('ZetraMail'),
@@ -1499,17 +1618,17 @@ class _MessagesScreenState extends State<MessagesScreen> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: ToggleButtons(
-                  isSelected: [_tab == 0, _tab == 1],
+                  isSelected: [_tab == 0, _tab == 1, _tab == 2],
                   onPressed: (i) => setState(() => _tab = i),
                   borderRadius: BorderRadius.circular(10),
                   selectedColor: Colors.white,
                   fillColor: Colors.white24,
                   color: Colors.white70,
                   constraints: BoxConstraints(
-                    minWidth: (MediaQuery.of(context).size.width - 32) / 2 - 4,
+                    minWidth: (MediaQuery.of(context).size.width - 32) / 3 - 4,
                     minHeight: 36,
                   ),
-                  children: const [Text('Inbox'), Text('Sent')],
+                  children: const [Text('Inbox'), Text('Archived'), Text('Sent')],
                 ),
               ),
               if (_tab == 0) _filterChips(),
@@ -1557,18 +1676,22 @@ class _MessagesScreenState extends State<MessagesScreen> {
                       Center(child: ElevatedButton(onPressed: _fetchMessages, child: const Text('Retry'))),
                     ],
                   )
-                : (_tab == 0 ? _messageList(_filteredInbox, isSent: false) : _messageList(_sent, isSent: true)),
+                : (_tab == 0
+                    ? _messageList(_filteredInbox, from: 'inbox')
+                    : _tab == 1
+                        ? _messageList(_archived, from: 'archived')
+                        : _messageList(_sent, from: currentFrom)),
       ),
     );
   }
 }
 
-/// Full-page message view (replaces the old bottom sheet).
-/// Pops with 'delete' if the user deletes the message from here.
+/// Full-page message view. Pops with 'delete', 'archive', or
+/// 'unarchive' depending on which action the user takes.
 class MessageDetailScreen extends StatelessWidget {
   final Map<String, dynamic> message;
-  final bool isSent;
-  const MessageDetailScreen({super.key, required this.message, required this.isSent});
+  final String from; // 'inbox' | 'archived' | 'sent'
+  const MessageDetailScreen({super.key, required this.message, required this.from});
 
   String _formatFullDate(String iso) {
     final dt = DateTime.tryParse(iso);
@@ -1590,10 +1713,26 @@ class MessageDetailScreen extends StatelessWidget {
       ...extractOtpCodes(body),
     }.toList();
 
+    final isInbox = from == 'inbox';
+    final isArchived = from == 'archived';
+    final isSent = from == 'sent';
+
     return Scaffold(
       appBar: AppBar(
         title: Text((message['from_app'] as String? ?? 'zetra').toUpperCase()),
         actions: [
+          if (isInbox)
+            IconButton(
+              icon: const Icon(Icons.archive_outlined),
+              tooltip: 'Archive',
+              onPressed: () => Navigator.of(context).pop('archive'),
+            ),
+          if (isArchived)
+            IconButton(
+              icon: const Icon(Icons.unarchive_outlined),
+              tooltip: 'Move to inbox',
+              onPressed: () => Navigator.of(context).pop('unarchive'),
+            ),
           if (!isSent)
             IconButton(
               icon: const Icon(Icons.delete_outline),
