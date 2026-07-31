@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'app_features.dart';
+
 // =====================================================================
 // Supabase project configuration.
 // Replace with your project's values from Project Settings -> API.
@@ -59,6 +61,7 @@ Future<void> main() async {
     url: kSupabaseUrl,
     anonKey: kSupabaseAnonKey,
   );
+  await NotificationService.instance.init();
   runApp(const ZetraIdApp());
 }
 
@@ -67,50 +70,18 @@ class ZetraIdApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Zetra ID',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: kZetraGreen,
-          primary: kZetraGreen,
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF6FBF8),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: kZetraGreen,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          centerTitle: true,
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: kZetraGreen,
-            foregroundColor: Colors.white,
-            minimumSize: const Size.fromHeight(50),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: kZetraGreen, width: 2),
-          ),
-        ),
-      ),
-      home: const AuthGate(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeModeNotifier,
+      builder: (context, mode, _) {
+        return MaterialApp(
+          title: 'Zetra ID',
+          debugShowCheckedModeBanner: false,
+          theme: kLightTheme,
+          darkTheme: kDarkTheme,
+          themeMode: mode,
+          home: const AppLockGate(child: AuthGate()),
+        );
+      },
     );
   }
 }
@@ -209,15 +180,6 @@ Widget buildOtpChip(BuildContext context, String code) {
 
 // =====================================================================
 // AuthGate
-//
-// On cold start, trusts Supabase's own persisted session to decide
-// whether to show AuthEntryScreen or RootScreen. After a fresh
-// sign-up/sign-in, _authenticated is intentionally NOT flipped by the
-// auth-state stream immediately — WelcomeScreen is shown first, and
-// only calling onAuthenticated() (via its "Continue" button) switches
-// to RootScreen. The stream is used only to catch involuntary
-// sign-outs (expired/revoked session), which bounce the user back to
-// AuthEntryScreen.
 // =====================================================================
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -234,10 +196,14 @@ class _AuthGateState extends State<AuthGate> {
   void initState() {
     super.initState();
     _authenticated = supabase.auth.currentSession != null;
+    if (_authenticated) {
+      NotificationService.instance.startListening();
+    }
     _authSubscription = supabase.auth.onAuthStateChange.listen((data) {
       if (!mounted) return;
       if (data.event == AuthChangeEvent.signedOut) {
         setState(() => _authenticated = false);
+        NotificationService.instance.stopListening();
       }
     });
   }
@@ -250,10 +216,12 @@ class _AuthGateState extends State<AuthGate> {
 
   void _onAuthenticated() {
     setState(() => _authenticated = true);
+    NotificationService.instance.startListening();
   }
 
   void _onLoggedOut() {
     setState(() => _authenticated = false);
+    NotificationService.instance.stopListening();
   }
 
   @override
@@ -266,7 +234,7 @@ class _AuthGateState extends State<AuthGate> {
 }
 
 // =====================================================================
-// AuthEntryScreen — login with username or Zetra ID, or go to signup.
+// AuthEntryScreen
 // =====================================================================
 class AuthEntryScreen extends StatefulWidget {
   final VoidCallback onAuthenticated;
@@ -437,7 +405,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
 }
 
 // =====================================================================
-// RegisterScreenOne — full name, username, password, confirm password.
+// RegisterScreenOne
 // =====================================================================
 class RegisterScreenOne extends StatefulWidget {
   final VoidCallback onAuthenticated;
@@ -571,7 +539,7 @@ class _RegisterScreenOneState extends State<RegisterScreenOne> {
 }
 
 // =====================================================================
-// RegisterScreenTwo — date of birth, gender, country, then creation.
+// RegisterScreenTwo
 // =====================================================================
 class RegisterScreenTwo extends StatefulWidget {
   final String fullName;
@@ -966,6 +934,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    );
+  }
+
   void _copyToClipboard(String label, String value) {
     Clipboard.setData(ClipboardData(text: value));
     ScaffoldMessenger.of(context).showSnackBar(
@@ -983,7 +957,7 @@ class _HomeScreenState extends State<HomeScreen> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(14),
         boxShadow: [
           BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
@@ -1030,6 +1004,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Zetra ID'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: _openSettings,
+          ),
           IconButton(
             icon: const Icon(Icons.description_outlined),
             tooltip: 'Terms & Privacy Policy',
@@ -1233,7 +1212,6 @@ class _MessagesScreenState extends State<MessagesScreen> {
     final index = list.indexOf(m);
     if (index == -1) return;
 
-    // Finalize any earlier pending delete before starting a new one.
     _pendingDeleteTimer?.cancel();
     _finalizePendingDelete();
 
@@ -1433,7 +1411,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
           child: Container(
             margin: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(14),
               border: isUnread ? Border.all(color: kZetraGreen.withOpacity(0.4)) : null,
               boxShadow: [
