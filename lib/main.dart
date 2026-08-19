@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-
+import 'update_gate.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -62,7 +62,7 @@ Future<void> main() async {
     anonKey: kSupabaseAnonKey,
   );
   await NotificationService.instance.init();
-  runApp(const ZetraIdApp());
+  runApp(const UpdateGate(child: ZetraIdApp()));
 }
 
 class ZetraIdApp extends StatelessWidget {
