@@ -1321,7 +1321,6 @@ class _MessagesScreenState extends State<MessagesScreen> {
   List<Map<String, dynamic>> _sent = [];
   int _tab = 0; // 0 = Inbox, 1 = Archived, 2 = Sent
   String? _appFilter;
-  bool _isReplying = false;
 
   Map<String, dynamic>? _pendingDeleteItem;
   int? _pendingDeleteIndex;
@@ -1356,7 +1355,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
       final inboxData = await supabase
           .from('messages')
-          .select('id, from_app, subject, body, code, read_at, created_at, archived_at')
+          .select('id, from_app, subject, body, code, read_at, created_at, archived_at, sender_zetramail')
           .eq('user_id', userId)
           .filter('deleted_at', 'is', null)
           .filter('archived_at', 'is', null)
@@ -1365,7 +1364,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
       final archivedData = await supabase
           .from('messages')
-          .select('id, from_app, subject, body, code, read_at, created_at, archived_at')
+          .select('id, from_app, subject, body, code, read_at, created_at, archived_at, sender_zetramail')
           .eq('user_id', userId)
           .filter('deleted_at', 'is', null)
           .not('archived_at', 'is', null)
@@ -1374,7 +1373,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
       final sentData = await supabase
           .from('messages')
-          .select('id, from_app, subject, body, code, read_at, created_at, archived_at')
+          .select('id, from_app, subject, body, code, read_at, created_at, archived_at, sender_zetramail')
           .eq('sender_id', userId)
           .filter('deleted_at', 'is', null)
           .order('created_at', ascending: false)
@@ -1598,64 +1597,34 @@ class _MessagesScreenState extends State<MessagesScreen> {
     }
   }
 
-  /// Reply from an inbox message. Peer-to-peer ZetraMail is stamped by
-  /// the backend as `from_app = "zetramail:<sender_username>"` (see
-  /// the screenshot where a self-sent test message showed as
-  /// "ZETRAMAIL:TOLUWACONNECT"), so we parse the username back out and
-  /// look up their current ZetraMail address via the existing search
-  /// RPC before opening Compose pre-filled with a "Re:" subject.
-  ///
-  /// NOTE: for a more robust long-term fix, add a `sender_zetramail`
-  /// column populated directly by `send_zetramail` on insert — then
-  /// this whole lookup step can be skipped (see backend_migration.sql).
-  Future<void> _openReply(Map<String, dynamic> m) async {
+  /// Reply from an inbox message. Peer-to-peer ZetraMail rows now carry
+  /// `sender_zetramail` directly (stamped by `send_zetramail` on insert,
+  /// per the Supabase migration), so this opens Compose immediately —
+  /// no extra network round trip to look the sender up.
+  void _openReply(Map<String, dynamic> m) {
     final username = MessageDetailScreen.senderUsername(m);
-    if (username == null) {
+    final zetramail = m['sender_zetramail'] as String?;
+    if (username == null || zetramail == null) {
       showZetraToast(context, "This message can't be replied to.", icon: Icons.info_outline);
       return;
     }
 
-    setState(() => _isReplying = true);
-    try {
-      final data = await supabase
-          .rpc('search_zetramail', params: {'p_query': username})
-          .timeout(const Duration(seconds: 15));
-      final results = List<Map<String, dynamic>>.from(data as List);
-      final match = results.firstWhere(
-        (r) => (r['username'] as String?)?.toLowerCase() == username.toLowerCase(),
-        orElse: () => {},
-      );
+    final rawSubject = (m['subject'] as String? ?? '').trim();
+    final subject = rawSubject.toLowerCase().startsWith('re:') ? rawSubject : 'Re: $rawSubject';
 
-      if (match.isEmpty) {
-        if (mounted) showZetraToast(context, 'Could not find that Zetra account.', icon: Icons.error_outline);
-        return;
-      }
-      if (!mounted) return;
-
-      final rawSubject = (m['subject'] as String? ?? '').trim();
-      final subject = rawSubject.toLowerCase().startsWith('re:') ? rawSubject : 'Re: $rawSubject';
-
-      final sent = await Navigator.of(context).push<bool>(
-        MaterialPageRoute(
-          builder: (_) => ComposeMailScreen(
-            recipientZetraMail: match['zetramail'] as String,
-            recipientUsername: match['username'] as String,
-            initialSubject: subject,
+    Navigator.of(context)
+        .push<bool>(
+          MaterialPageRoute(
+            builder: (_) => ComposeMailScreen(
+              recipientZetraMail: zetramail,
+              recipientUsername: username,
+              initialSubject: subject,
+            ),
           ),
-        ),
-      );
+        )
+        .then((sent) {
       if (sent == true) _fetchMessages();
-    } on PostgrestException catch (_) {
-      if (mounted) showZetraToast(context, 'Something went wrong. Please try again.', icon: Icons.error_outline);
-    } on SocketException {
-      if (mounted) showZetraToast(context, 'No internet connection.', icon: Icons.wifi_off);
-    } on TimeoutException {
-      if (mounted) showZetraToast(context, 'The request timed out. Please try again.', icon: Icons.error_outline);
-    } catch (_) {
-      if (mounted) showZetraToast(context, 'Something went wrong. Please try again.', icon: Icons.error_outline);
-    } finally {
-      if (mounted) setState(() => _isReplying = false);
-    }
+    });
   }
 
   List<String> get _availableApps {
@@ -1961,40 +1930,31 @@ class _MessagesScreenState extends State<MessagesScreen> {
         tooltip: 'New message',
         child: const Icon(Icons.edit_outlined, color: Colors.white),
       ),
-      body: Stack(
-        children: [
-          RefreshIndicator(
-            color: kZetraGreen,
-            onRefresh: _fetchMessages,
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator(color: kZetraGreen))
-                : _failure != null
-                    ? ListView(
-                        children: [
-                          const SizedBox(height: 80),
-                          Icon(
-                            _failure!.isNetworkError ? Icons.wifi_off : Icons.error_outline,
-                            size: 48,
-                            color: Colors.grey.shade400,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(_failure!.message, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700)),
-                          const SizedBox(height: 16),
-                          Center(child: ElevatedButton(onPressed: _fetchMessages, child: const Text('Retry'))),
-                        ],
-                      )
-                    : (_tab == 0
-                        ? _messageList(_filteredInbox, from: 'inbox')
-                        : _tab == 1
-                            ? _messageList(_archived, from: 'archived')
-                            : _messageList(_sent, from: currentFrom)),
-          ),
-          if (_isReplying)
-            Container(
-              color: Colors.black.withOpacity(0.15),
-              child: const Center(child: CircularProgressIndicator(color: kZetraGreen)),
-            ),
-        ],
+      body: RefreshIndicator(
+        color: kZetraGreen,
+        onRefresh: _fetchMessages,
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator(color: kZetraGreen))
+            : _failure != null
+                ? ListView(
+                    children: [
+                      const SizedBox(height: 80),
+                      Icon(
+                        _failure!.isNetworkError ? Icons.wifi_off : Icons.error_outline,
+                        size: 48,
+                        color: Colors.grey.shade400,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(_failure!.message, textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700)),
+                      const SizedBox(height: 16),
+                      Center(child: ElevatedButton(onPressed: _fetchMessages, child: const Text('Retry'))),
+                    ],
+                  )
+                : (_tab == 0
+                    ? _messageList(_filteredInbox, from: 'inbox')
+                    : _tab == 1
+                        ? _messageList(_archived, from: 'archived')
+                        : _messageList(_sent, from: currentFrom)),
       ),
     );
   }
