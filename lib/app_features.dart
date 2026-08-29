@@ -641,3 +641,24 @@ class StreakService {
     return count;
   }
 }
+
+// =====================================================================
+// ONBOARDING SERVICE — tracks whether the first-run feature tour has
+// been shown, so it only appears once per install.
+// =====================================================================
+class OnboardingService {
+  OnboardingService._();
+  static final OnboardingService instance = OnboardingService._();
+
+  final _storage = const FlutterSecureStorage();
+  static const _kSeenKey = 'zetra_onboarding_seen_v1';
+
+  Future<bool> hasSeenOnboarding() async {
+    final v = await _storage.read(key: _kSeenKey);
+    return v == 'true';
+  }
+
+  Future<void> markSeen() async {
+    await _storage.write(key: _kSeenKey, value: 'true');
+  }
+}
