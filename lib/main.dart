@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import 'app_features.dart';
 
@@ -344,7 +345,7 @@ class _AuthGateState extends State<AuthGate> {
     if (!_authenticated) {
       return AuthEntryScreen(onAuthenticated: _onAuthenticated);
     }
-    return RootScreen(onLoggedOut: _onLoggedOut);
+    return OnboardingGate(child: RootScreen(onLoggedOut: _onLoggedOut));
   }
 }
 
@@ -859,6 +860,275 @@ class _RegisterScreenTwoState extends State<RegisterScreenTwo> {
   }
 }
 
+// =====================================================================
+// ONBOARDING — a one-time, dismissible feature tour shown the first
+// time someone reaches the main app. Purely local (OnboardingService),
+// never blocks login, and never re-appears once seen.
+// =====================================================================
+class OnboardingGate extends StatefulWidget {
+  final Widget child;
+  const OnboardingGate({super.key, required this.child});
+
+  @override
+  State<OnboardingGate> createState() => _OnboardingGateState();
+}
+
+class _OnboardingGateState extends State<OnboardingGate> {
+  bool? _showOnboarding; // null = still checking, don't block first paint
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    final seen = await OnboardingService.instance.hasSeenOnboarding();
+    if (mounted) setState(() => _showOnboarding = !seen);
+  }
+
+  Future<void> _finish() async {
+    await OnboardingService.instance.markSeen();
+    if (mounted) setState(() => _showOnboarding = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showOnboarding == true) {
+      return OnboardingScreen(onDone: _finish);
+    }
+    return widget.child;
+  }
+}
+
+class _OnboardingPageData {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _OnboardingPageData({required this.icon, required this.title, required this.subtitle});
+}
+
+class OnboardingScreen extends StatefulWidget {
+  final VoidCallback onDone;
+  const OnboardingScreen({super.key, required this.onDone});
+
+  @override
+  State<OnboardingScreen> createState() => _OnboardingScreenState();
+}
+
+class _OnboardingScreenState extends State<OnboardingScreen> {
+  final _controller = PageController();
+  int _page = 0;
+
+  static const _pages = [
+    _OnboardingPageData(
+      icon: Icons.badge_outlined,
+      title: 'One identity, everywhere',
+      subtitle: 'Your Zetra ID works across every Zetra app — NAI, Nigergram, ZTC, and more.',
+    ),
+    _OnboardingPageData(
+      icon: Icons.mail_outline,
+      title: 'All your codes in one place',
+      subtitle: 'ZetraMail collects verification codes and messages so you never dig through spam.',
+    ),
+    _OnboardingPageData(
+      icon: Icons.reply,
+      title: 'Reply, don\u2019t just receive',
+      subtitle: 'Message other Zetra ID holders directly and reply right from your inbox.',
+    ),
+    _OnboardingPageData(
+      icon: Icons.local_fire_department,
+      title: 'Build your streak',
+      subtitle: 'Open Zetra daily to grow your streak and complete your Zetra Score.',
+    ),
+    _OnboardingPageData(
+      icon: Icons.qr_code,
+      title: 'Share with a scan',
+      subtitle: 'Show your QR code so anyone can add you on Zetra in seconds.',
+    ),
+  ];
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _next() {
+    if (_page == _pages.length - 1) {
+      widget.onDone();
+      return;
+    }
+    _controller.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kZetraGreen,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: TextButton(
+                  onPressed: widget.onDone,
+                  child: const Text('Skip', style: TextStyle(color: Colors.white70)),
+                ),
+              ),
+            ),
+            Expanded(
+              child: PageView.builder(
+                controller: _controller,
+                itemCount: _pages.length,
+                onPageChanged: (i) => setState(() => _page = i),
+                itemBuilder: (context, i) {
+                  final p = _pages[i];
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 96,
+                          height: 96,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.14),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(p.icon, color: Colors.white, size: 46),
+                        ),
+                        const SizedBox(height: 32),
+                        Text(
+                          p.title,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          p.subtitle,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white70, fontSize: 15, height: 1.4),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(_pages.length, (i) {
+                final active = i == _page;
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  width: active ? 22 : 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: active ? Colors.white : Colors.white.withOpacity(0.35),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                );
+              }),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: kZetraGreen),
+                  onPressed: _next,
+                  child: Text(_page == _pages.length - 1 ? 'Get Started' : 'Next'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// SHARE ZETRA ID — QR code so another person can scan and add you.
+// Requires the `qr_flutter` package (see pubspec note).
+// =====================================================================
+class ShareZetraIdScreen extends StatelessWidget {
+  final String zetraId;
+  final String username;
+  final String zetramail;
+  const ShareZetraIdScreen({
+    super.key,
+    required this.zetraId,
+    required this.username,
+    required this.zetramail,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Share Zetra ID')),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                buildAvatar(username, size: 64),
+                const SizedBox(height: 16),
+                Text(username, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 2),
+                Text(zetramail, style: TextStyle(color: Colors.grey.shade600)),
+                const SizedBox(height: 28),
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 18, offset: const Offset(0, 6)),
+                    ],
+                  ),
+                  child: QrImageView(
+                    data: 'zetraid:$zetraId',
+                    version: QrVersions.auto,
+                    size: 220,
+                    foregroundColor: kZetraGreenDark,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Scan to add me on Zetra',
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                ),
+                const SizedBox(height: 24),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: zetraId));
+                    HapticFeedback.lightImpact();
+                    showZetraToast(context, 'Zetra ID copied');
+                  },
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: kZetraGreen),
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.copy_outlined, color: kZetraGreenDark, size: 18),
+                  label: Text(zetraId, style: const TextStyle(color: kZetraGreenDark, fontFamily: 'monospace')),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class WelcomeScreen extends StatelessWidget {
   final String username;
   final VoidCallback onContinue;
@@ -1227,6 +1497,20 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Zetra ID'),
         actions: [
+          if (_user != null)
+            IconButton(
+              icon: const Icon(Icons.qr_code_outlined),
+              tooltip: 'Share Zetra ID',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ShareZetraIdScreen(
+                    zetraId: _user!['zetra_id'] as String? ?? '',
+                    username: _user!['username'] as String? ?? '',
+                    zetramail: _user!['zetramail'] as String? ?? '',
+                  ),
+                ),
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
@@ -1373,7 +1657,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
       final sentData = await supabase
           .from('messages')
-          .select('id, from_app, subject, body, code, read_at, created_at, archived_at, sender_zetramail')
+          .select('id, from_app, subject, body, code, read_at, created_at, archived_at, sender_zetramail, user_id')
           .eq('sender_id', userId)
           .filter('deleted_at', 'is', null)
           .order('created_at', ascending: false)
@@ -1382,6 +1666,32 @@ class _MessagesScreenState extends State<MessagesScreen> {
       final inbox = List<Map<String, dynamic>>.from(inboxData as List);
       final archived = List<Map<String, dynamic>>.from(archivedData as List);
       final sent = List<Map<String, dynamic>>.from(sentData as List);
+
+      // The Sent tab should show who each message was sent *to*, not the
+      // sender's own from_app label. `messages.user_id` is the recipient's
+      // id, so batch-fetch their username/zetramail from `profiles` and
+      // attach it locally — no assumptions about foreign-key names needed.
+      final recipientIds = sent.map((m) => m['user_id'] as String?).whereType<String>().toSet().toList();
+      if (recipientIds.isNotEmpty) {
+        try {
+          final profilesData = await supabase
+              .from('profiles')
+              .select('id, username, zetramail')
+              .inFilter('id', recipientIds)
+              .timeout(const Duration(seconds: 15));
+          final recipientMap = <String, Map<String, dynamic>>{
+            for (final p in List<Map<String, dynamic>>.from(profilesData as List)) p['id'] as String: p,
+          };
+          for (final m in sent) {
+            final r = recipientMap[m['user_id'] as String?];
+            m['recipient_username'] = r?['username'];
+            m['recipient_zetramail'] = r?['zetramail'];
+          }
+        } catch (_) {
+          // Best effort — Sent tab falls back to the from_app label if
+          // recipient lookup fails for any reason.
+        }
+      }
 
       setState(() {
         _inbox = inbox;
@@ -1713,7 +2023,15 @@ class _MessagesScreenState extends State<MessagesScreen> {
         }.toList();
         final isVerification = codes.isNotEmpty;
         final senderLabel = (m['from_app'] as String? ?? 'zetra');
-        final avatarSeed = senderLabel.contains(':') ? senderLabel.split(':').last : senderLabel;
+        final recipientUsername = m['recipient_username'] as String?;
+        // Sent tab shows who the message went *to*; every other tab
+        // shows who it came from.
+        final displayLabel = isSent && recipientUsername != null
+            ? 'To: $recipientUsername'
+            : senderLabel.toUpperCase();
+        final avatarSeed = isSent && recipientUsername != null
+            ? recipientUsername
+            : (senderLabel.contains(':') ? senderLabel.split(':').last : senderLabel);
 
         final card = Container(
           margin: const EdgeInsets.only(bottom: 12),
@@ -1753,7 +2071,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                 ),
                               Expanded(
                                 child: Text(
-                                  senderLabel.toUpperCase(),
+                                  displayLabel,
                                   style: const TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.bold,
@@ -2001,12 +2319,18 @@ class MessageDetailScreen extends StatelessWidget {
     final isArchived = from == 'archived';
     final isSent = from == 'sent';
     final senderLabel = (message['from_app'] as String? ?? 'zetra');
-    final avatarSeed = senderLabel.contains(':') ? senderLabel.split(':').last : senderLabel;
+    final recipientUsername = message['recipient_username'] as String?;
+    final displayLabel = isSent && recipientUsername != null
+        ? 'To: $recipientUsername'
+        : senderLabel.toUpperCase();
+    final avatarSeed = isSent && recipientUsername != null
+        ? recipientUsername
+        : (senderLabel.contains(':') ? senderLabel.split(':').last : senderLabel);
     final canReply = isInbox && senderUsername(message) != null;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(senderLabel.toUpperCase()),
+        title: Text(displayLabel),
         actions: [
           if (canReply)
             IconButton(
@@ -2248,7 +2572,7 @@ class _SearchZetraMailScreenState extends State<SearchZetraMailScreen> {
                                 return Container(
                                   padding: const EdgeInsets.all(14),
                                   decoration: BoxDecoration(
-                                    color: Colors.white,
+                                    color: Theme.of(context).cardColor,
                                     borderRadius: BorderRadius.circular(14),
                                     boxShadow: [
                                       BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
