@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'app_features.dart';
+import 'security_features.dart' show handlePostAuthSecurityCheck, SecurityScreen;
 
 // =====================================================================
 // Supabase project configuration.
@@ -54,6 +55,18 @@ const List<String> kCountries = [
   'Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine', 'United Arab Emirates', 'United Kingdom',
   'United States', 'Uruguay', 'Uzbekistan', 'Vanuatu', 'Vatican City', 'Venezuela',
   'Vietnam', 'Yemen', 'Zambia', 'Zimbabwe',
+];
+
+/// All 36 Nigerian states plus the Federal Capital Territory (Abuja),
+/// shown as a second dropdown when the selected country is Nigeria —
+/// this app's primary market.
+const List<String> kNigerianStates = [
+  'Abia', 'Adamawa', 'Akwa Ibom', 'Anambra', 'Bauchi', 'Bayelsa', 'Benue',
+  'Borno', 'Cross River', 'Delta', 'Ebonyi', 'Edo', 'Ekiti', 'Enugu',
+  'Federal Capital Territory (Abuja)', 'Gombe', 'Imo', 'Jigawa', 'Kaduna',
+  'Kano', 'Katsina', 'Kebbi', 'Kogi', 'Kwara', 'Lagos', 'Nasarawa', 'Niger',
+  'Ogun', 'Ondo', 'Osun', 'Oyo', 'Plateau', 'Rivers', 'Sokoto', 'Taraba',
+  'Yobe', 'Zamfara',
 ];
 
 Future<void> main() async {
@@ -411,6 +424,12 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
 
       final username = (response.user?.userMetadata?['username'] as String?) ?? '';
 
+      // Fire-and-forget: records this device/login and alerts the user
+      // if it's a new device on an account with prior trusted devices.
+      // Never awaited into the critical path — a security-signal hiccup
+      // must never block a legitimate login.
+      unawaited(handlePostAuthSecurityCheck());
+
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute(
@@ -677,7 +696,8 @@ class RegisterScreenTwo extends StatefulWidget {
 class _RegisterScreenTwoState extends State<RegisterScreenTwo> {
   DateTime? _dateOfBirth;
   String? _gender;
-  String? _country;
+  String? _country = 'Nigeria'; // Zetra's primary market — sensible default, still changeable.
+  String? _state;
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -752,6 +772,7 @@ class _RegisterScreenTwoState extends State<RegisterScreenTwo> {
               'date_of_birth': dob,
               if (_gender != null) 'gender': _gender,
               if (_country != null) 'country': _country,
+              if (_state != null) 'state': _state,
             },
           )
           .timeout(const Duration(seconds: 20));
@@ -760,6 +781,8 @@ class _RegisterScreenTwoState extends State<RegisterScreenTwo> {
         setState(() => _errorMessage = 'Something went wrong creating your account. Please try again.');
         return;
       }
+
+      unawaited(handlePostAuthSecurityCheck());
 
       if (!mounted) return;
       await Navigator.of(context).pushAndRemoveUntil(
@@ -835,8 +858,24 @@ class _RegisterScreenTwoState extends State<RegisterScreenTwo> {
                   prefixIcon: Icon(Icons.public_outlined),
                 ),
                 items: kCountries.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (v) => setState(() => _country = v),
+                onChanged: (v) => setState(() {
+                  _country = v;
+                  if (v != 'Nigeria') _state = null; // clear an out-of-scope state selection
+                }),
               ),
+              if (_country == 'Nigeria') ...[
+                const SizedBox(height: 14),
+                DropdownButtonFormField<String>(
+                  value: _state,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'State (optional)',
+                    prefixIcon: Icon(Icons.map_outlined),
+                  ),
+                  items: kNigerianStates.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                  onChanged: (v) => setState(() => _state = v),
+                ),
+              ],
               const SizedBox(height: 20),
               if (_errorMessage != null) ...[
                 buildErrorBanner(_errorMessage!),
@@ -1266,7 +1305,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final data = await supabase
           .from('profiles')
-          .select('zetra_id, username, zetramail, full_name, date_of_birth, gender, country')
+          .select('zetra_id, username, zetramail, full_name, date_of_birth, gender, country, state')
           .eq('id', userId)
           .single()
           .timeout(const Duration(seconds: 20));
@@ -1569,6 +1608,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 _identityCard('Gender', _user!['gender'], Icons.people_outline, copyable: false),
               if (_user!['country'] != null)
                 _identityCard('Country', _user!['country'], Icons.public_outlined, copyable: false),
+              if (_user!['state'] != null)
+                _identityCard('State', _user!['state'], Icons.map_outlined, copyable: false),
               const SizedBox(height: 8),
               Center(
                 child: TextButton(
