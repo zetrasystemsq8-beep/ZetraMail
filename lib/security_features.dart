@@ -354,7 +354,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
     try {
       final factors = await supabase.auth.mfa.listFactors();
       for (final f in factors.totp) {
-        await supabase.auth.mfa.unenroll(UnenrollParams(factorId: f.id));
+        await supabase.auth.mfa.unenroll(f.id);
       }
       await SecurityEventService.instance.logEvent('MFA_DISABLED');
       if (mounted) showZetraToast(context, 'Two-factor authentication turned off');
@@ -707,10 +707,15 @@ class _MfaEnrollScreenState extends State<MfaEnrollScreen> {
         factorType: FactorType.totp,
         issuer: 'Zetra ID',
       );
+      final totp = response.totp;
+      if (totp == null) {
+        setState(() => _error = 'Could not start two-factor setup. Please try again.');
+        return;
+      }
       setState(() {
         _factorId = response.id;
-        _secret = response.totp.secret;
-        _qrSvg = response.totp.qrCode;
+        _secret = totp.secret;
+        _qrSvg = totp.qrCode;
       });
     } catch (e) {
       setState(() => _error = 'Could not start two-factor setup. Please try again.');
