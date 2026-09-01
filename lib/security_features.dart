@@ -139,6 +139,26 @@ class SecurityEventService {
     }
   }
 
+  /// Call this on EVERY login attempt — success or failure — from the
+  /// login screen, before you know whether it succeeded. Unlike
+  /// logEvent(), this works even when there's no session yet (a failed
+  /// login has no authenticated user), so it's backed by a separate
+  /// RPC that doesn't require auth.uid(). The server side tracks
+  /// repeated failures per identifier and raises a BRUTE_FORCE_SUSPECTED
+  /// alert automatically — see security_alerts_migration.sql.
+  Future<void> logLoginAttempt(String identifier, bool success) async {
+    try {
+      final deviceId = await DeviceIdentityService.instance.getOrCreateInstallationId();
+      await supabase.rpc('log_login_attempt', params: {
+        'p_identifier': identifier,
+        'p_success': success,
+        'p_device_id': deviceId,
+      }).timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Best effort — never block the login flow over this.
+    }
+  }
+
   Future<List<Map<String, dynamic>>> fetchRecentEvents({int limit = 50}) async {
     final data = await supabase
         .from('security_events')
