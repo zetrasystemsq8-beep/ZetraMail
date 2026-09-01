@@ -8,7 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'app_features.dart';
-import 'security_features.dart' show handlePostAuthSecurityCheck, SecurityScreen;
+import 'security_features.dart' show handlePostAuthSecurityCheck, SecurityScreen, SecurityEventService;
 
 // =====================================================================
 // Supabase project configuration.
@@ -409,6 +409,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
           .timeout(const Duration(seconds: 20)) as String?;
 
       if (resolvedEmail == null) {
+        unawaited(SecurityEventService.instance.logLoginAttempt(identifier, false));
         setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
         return;
       }
@@ -418,6 +419,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
           .timeout(const Duration(seconds: 20));
 
       if (response.session == null) {
+        unawaited(SecurityEventService.instance.logLoginAttempt(identifier, false));
         setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
         return;
       }
@@ -428,6 +430,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
       // if it's a new device on an account with prior trusted devices.
       // Never awaited into the critical path — a security-signal hiccup
       // must never block a legitimate login.
+      unawaited(SecurityEventService.instance.logLoginAttempt(identifier, true));
       unawaited(handlePostAuthSecurityCheck());
 
       if (!mounted) return;
@@ -437,6 +440,7 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
         ),
       );
     } on AuthException catch (_) {
+      unawaited(SecurityEventService.instance.logLoginAttempt(_identifierController.text.trim(), false));
       setState(() => _errorMessage = 'Incorrect login credentials. Please check and try again.');
     } on PostgrestException catch (_) {
       setState(() => _errorMessage = 'Something went wrong. Please try again.');
