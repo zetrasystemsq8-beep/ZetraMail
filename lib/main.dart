@@ -9,6 +9,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import 'app_features.dart';
 import 'security_features.dart' show handlePostAuthSecurityCheck, SecurityScreen, SecurityEventService;
+import 'reports_feature.dart' show ReportScreen;
 
 // =====================================================================
 // Supabase project configuration.
@@ -1208,9 +1209,15 @@ class WelcomeScreen extends StatelessWidget {
                     backgroundColor: Colors.white,
                     foregroundColor: kZetraGreen,
                   ),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    onContinue();
+                  onPressed: () async {
+                    final shouldOffer = await AppLockService.instance.shouldOfferBiometricPrompt();
+                    if (shouldOffer && context.mounted) {
+                      await _offerBiometricSignIn(context);
+                    }
+                    if (context.mounted) {
+                      Navigator.of(context).pop();
+                      onContinue();
+                    }
                   },
                   child: const Text('Continue'),
                 ),
@@ -1220,6 +1227,41 @@ class WelcomeScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Shown once, right after a successful login or registration, on any
+/// device with usable biometric hardware. Turning it on reuses the
+/// exact same AppLockService/LockScreen already in the app — a PIN is
+/// still set as the fallback (matching how Face ID/Touch ID always
+/// keep a passcode fallback on iOS and Android), but day-to-day, the
+/// first thing the user sees on opening Zetra is their fingerprint or
+/// face, not a password field.
+Future<void> _offerBiometricSignIn(BuildContext context) async {
+  final enable = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Sign in faster next time?'),
+      content: const Text(
+        'Use your fingerprint or face to unlock Zetra instead of typing your password every time you open the app.',
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Enable')),
+      ],
+    ),
+  );
+
+  await AppLockService.instance.markBiometricPromptShown();
+
+  if (enable != true || !context.mounted) return;
+
+  final pin = await Navigator.of(context).push<String>(
+    MaterialPageRoute(builder: (_) => const SetPinScreen()),
+  );
+  if (pin != null && pin.length >= 4) {
+    await AppLockService.instance.setPin(pin);
+    await AppLockService.instance.setLockEnabled(true);
   }
 }
 
@@ -2401,6 +2443,20 @@ class MessageDetailScreen extends StatelessWidget {
               tooltip: 'Delete',
               onPressed: () => Navigator.of(context).pop('delete'),
             ),
+          if (!isSent)
+            IconButton(
+              icon: const Icon(Icons.flag_outlined),
+              tooltip: 'Report',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ReportScreen(
+                    reportType: 'message',
+                    targetMessageId: message['id'] as String?,
+                    targetUsername: avatarSeed,
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
       body: SafeArea(
@@ -2628,7 +2684,25 @@ class _SearchZetraMailScreenState extends State<SearchZetraMailScreen> {
                                     leading: buildAvatar(displayName, size: 44),
                                     title: Text(displayName),
                                     subtitle: Text(r['zetramail'] as String? ?? ''),
-                                    trailing: const Icon(Icons.chevron_right, color: kZetraGreenDark),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.flag_outlined, size: 20, color: Colors.grey),
+                                          tooltip: 'Report',
+                                          onPressed: () => Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                              builder: (_) => ReportScreen(
+                                                reportType: 'user',
+                                                targetUsername: r['username'] as String?,
+                                                targetZetramail: r['zetramail'] as String?,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        const Icon(Icons.chevron_right, color: kZetraGreenDark),
+                                      ],
+                                    ),
                                     onTap: () => _openCompose(r),
                                   ),
                                 );

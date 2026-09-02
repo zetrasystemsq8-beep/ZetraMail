@@ -231,6 +231,7 @@ class AppLockService {
   final _storage = const FlutterSecureStorage();
   static const _kPinKey = 'zetra_lock_pin';
   static const _kLockEnabledKey = 'zetra_lock_enabled';
+  static const _kBiometricPromptShownKey = 'zetra_biometric_prompt_shown';
 
   Future<bool> isLockEnabled() async {
     final v = await _storage.read(key: _kLockEnabledKey);
@@ -266,6 +267,35 @@ class AppLockService {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Whether this device has usable biometric/passcode hardware at
+  /// all — used to decide whether it's even worth offering the
+  /// "sign in faster" prompt.
+  Future<bool> isBiometricAvailable() async {
+    final auth = LocalAuthentication();
+    try {
+      final supported = await auth.isDeviceSupported();
+      final canCheck = await auth.canCheckBiometrics;
+      return supported || canCheck;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// True exactly once per install: the device supports biometrics,
+  /// the user hasn't already turned on App Lock, and they haven't
+  /// been asked before. Keeps the prompt from ever being naggy.
+  Future<bool> shouldOfferBiometricPrompt() async {
+    final alreadyEnabled = await isLockEnabled();
+    if (alreadyEnabled) return false;
+    final alreadyShown = await _storage.read(key: _kBiometricPromptShownKey);
+    if (alreadyShown == 'true') return false;
+    return isBiometricAvailable();
+  }
+
+  Future<void> markBiometricPromptShown() async {
+    await _storage.write(key: _kBiometricPromptShownKey, value: 'true');
   }
 }
 
