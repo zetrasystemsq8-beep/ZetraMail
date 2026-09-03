@@ -38,6 +38,14 @@
             android:name="flutterEmbedding"
             android:value="2"/>
 
+        <!-- Proves to Android that this app and zetra-green-link.lovable.app
+             belong to each other, so passkeys/fingerprint login can be
+             shared between the app and the website. Points at the
+             asset_statements string defined in res/values/strings.xml. -->
+        <meta-data
+            android:name="asset_statements"
+            android:resource="@string/asset_statements"/>
+
     </application>
 
     <queries>
