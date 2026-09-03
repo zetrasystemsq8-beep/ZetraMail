@@ -4,6 +4,7 @@ import 'update_gate.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:passkeys/authenticator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -462,6 +463,43 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
     );
   }
 
+  /// Signs in using a passkey already registered for this account (see
+  /// SecurityScreen's "Fingerprint sign-in" section, where one gets
+  /// created). This is the real, cross-app version — the credential is
+  /// recognized by Supabase directly, not just this one app's local
+  /// lock screen.
+  Future<void> _signInWithPasskey() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final authenticator = PasskeyAuthenticator();
+      final response = await supabase.auth.signInWithPasskey(authenticator);
+
+      if (response.session == null) {
+        setState(() => _errorMessage = 'Could not sign in with fingerprint. Please try again or use your password.');
+        return;
+      }
+
+      final username = (response.user?.userMetadata?['username'] as String?) ?? '';
+      unawaited(SecurityEventService.instance.logLoginAttempt(username.isNotEmpty ? username : 'passkey', true));
+      unawaited(handlePostAuthSecurityCheck());
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => WelcomeScreen(username: username, onContinue: widget.onAuthenticated),
+        ),
+      );
+    } catch (_) {
+      setState(() => _errorMessage = 'No fingerprint sign-in set up on this device yet, or it was cancelled.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -527,6 +565,20 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
                       )
                     : const Text('Log In'),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _isLoading ? null : _signInWithPasskey,
+                icon: const Icon(Icons.fingerprint, color: kZetraGreenDark),
+                label: const Text(
+                  'Sign in with fingerprint',
+                  style: TextStyle(color: kZetraGreenDark, fontWeight: FontWeight.w600),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: kZetraGreen),
+                  minimumSize: const Size.fromHeight(50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
               ),
               const SizedBox(height: 12),
               TextButton(

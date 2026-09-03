@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:passkeys/authenticator.dart';
 
 import 'app_features.dart' show NotificationService;
 import 'main.dart' show supabase, kZetraGreen, kZetraGreenDark, buildErrorBanner, showZetraToast;
@@ -313,12 +314,50 @@ class SecurityScreen extends StatefulWidget {
 class _SecurityScreenState extends State<SecurityScreen> {
   bool _loadingMfa = true;
   bool _mfaEnabled = false;
+  bool _loadingPasskeys = true;
+  bool _hasPasskey = false;
+  bool _isRegisteringPasskey = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
     _loadMfaStatus();
+    _loadPasskeyStatus();
+  }
+
+  Future<void> _loadPasskeyStatus() async {
+    setState(() => _loadingPasskeys = true);
+    try {
+      final passkeys = await supabase.auth.passkey.list();
+      if (mounted) setState(() => _hasPasskey = passkeys.isNotEmpty);
+    } catch (_) {
+      // Best effort — passkeys are beta; a failed check just means the
+      // section shows "not set up" rather than blocking the screen.
+    } finally {
+      if (mounted) setState(() => _loadingPasskeys = false);
+    }
+  }
+
+  /// Registers a brand-new passkey for the signed-in user. Because
+  /// this account is shared across every Zetra app on the same
+  /// Supabase project, a passkey set up here works to sign in from
+  /// any of them on this device — not just ZetraMail.
+  Future<void> _registerPasskey() async {
+    setState(() => _isRegisteringPasskey = true);
+    try {
+      final authenticator = PasskeyAuthenticator();
+      await supabase.auth.registerPasskey(authenticator);
+      await SecurityEventService.instance.logEvent('PASSKEY_REGISTERED');
+      if (mounted) showZetraToast(context, 'Fingerprint sign-in enabled');
+      _loadPasskeyStatus();
+    } catch (_) {
+      if (mounted) {
+        showZetraToast(context, 'Could not set up fingerprint sign-in. Please try again.', icon: Icons.error_outline);
+      }
+    } finally {
+      if (mounted) setState(() => _isRegisteringPasskey = false);
+    }
   }
 
   Future<void> _loadMfaStatus() async {
@@ -391,6 +430,26 @@ class _SecurityScreenState extends State<SecurityScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _sectionCard(
+            icon: Icons.fingerprint,
+            title: 'Fingerprint sign-in',
+            subtitle: _loadingPasskeys
+                ? 'Checking status…'
+                : (_hasPasskey
+                    ? 'Set up — sign in with your fingerprint or face across every Zetra app on this device.'
+                    : 'Sign in with your fingerprint or face instead of typing your password — works across every Zetra app.'),
+            trailing: _loadingPasskeys
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4))
+                : (_hasPasskey
+                    ? const Icon(Icons.check_circle, color: kZetraGreen)
+                    : (_isRegisteringPasskey
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4))
+                        : TextButton(
+                            onPressed: _registerPasskey,
+                            child: const Text('Set up', style: TextStyle(color: kZetraGreen, fontWeight: FontWeight.w600)),
+                          ))),
+          ),
+          const SizedBox(height: 12),
           _sectionCard(
             icon: Icons.verified_user_outlined,
             title: 'Two-factor authentication',
