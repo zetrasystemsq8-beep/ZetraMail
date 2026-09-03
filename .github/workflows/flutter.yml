@@ -38,6 +38,14 @@ jobs:
           keyAlias=${{ secrets.KEY_ALIAS }}
           EOF
 
+      - name: Print release SHA256 fingerprint
+        run: |
+          keytool -list -v \
+            -keystore android/app/zetramail-release.jks \
+            -alias "${{ secrets.KEY_ALIAS }}" \
+            -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+            | grep "SHA256:"
+
       - name: Fix app icon
         run: |
           mkdir -p android/app/src/main/res/mipmap-mdpi
