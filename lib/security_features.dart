@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:passkeys/authenticator.dart';
+import 'package:android_id/android_id.dart';
 
 import 'app_features.dart' show NotificationService;
 import 'main.dart' show supabase, kZetraGreen, kZetraGreenDark, buildErrorBanner, showZetraToast;
@@ -63,18 +64,41 @@ class DeviceIdentityService {
   final _storage = const FlutterSecureStorage();
   static const _kDeviceIdKey = 'zetra_device_id';
 
-  /// A random, local-only identifier — not derived from any hardware
-  /// serial, IMEI, or advertising ID. It changes if the app is
-  /// reinstalled or the user clears app data, which is intentional:
-  /// it identifies "this app installation," not "this physical device"
-  /// in a way that could be used to fingerprint someone across apps.
+  /// The device identifier used for account-abuse flagging (multiple
+  /// accounts on one device). On Android, this reads the OS-level
+  /// Settings.Secure.ANDROID_ID directly — it survives an app
+  /// uninstall/reinstall (it's tied to the phone + our app's signing
+  /// key, not to app storage), which is what makes it meaningfully
+  /// harder to dodge than a freshly-generated ID would be. It still
+  /// resets on a full factory reset, and it changes if the app is
+  /// ever re-signed with a different key — neither of which this
+  /// pretends to solve.
+  ///
+  /// On non-Android platforms (iOS, desktop, or if the Android read
+  /// fails for any reason), this falls back to the original
+  /// random-local-ID approach: generated once, cached in secure
+  /// storage, and reset on reinstall. Weaker, but functional.
   Future<String> getOrCreateInstallationId() async {
+    if (Platform.isAndroid) {
+      try {
+        final androidId = await const AndroidId().getId();
+        if (androidId != null && androidId.trim().isNotEmpty) {
+          return 'android:$androidId';
+        }
+      } catch (_) {
+        // Fall through to the local fallback below.
+      }
+    }
+    return _getOrCreateLocalFallbackId();
+  }
+
+  Future<String> _getOrCreateLocalFallbackId() async {
     final existing = await _storage.read(key: _kDeviceIdKey);
     if (existing != null && existing.isNotEmpty) return existing;
 
     final random = Random.secure();
     final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-    final id = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final id = 'local:${bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join()}';
 
     await _storage.write(key: _kDeviceIdKey, value: id);
     return id;
