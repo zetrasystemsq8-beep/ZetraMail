@@ -1807,29 +1807,29 @@ class _MessagesScreenState extends State<MessagesScreen> {
       final sent = List<Map<String, dynamic>>.from(sentData as List);
 
       // The Sent tab should show who each message was sent *to*, not the
-      // sender's own from_app label. `messages.user_id` is the recipient's
-      // id, so batch-fetch their username/zetramail from `profiles` and
-      // attach it locally — no assumptions about foreign-key names needed.
-      final recipientIds = sent.map((m) => m['user_id'] as String?).whereType<String>().toSet().toList();
-      if (recipientIds.isNotEmpty) {
+      // sender's own from_app label. This goes through a security-definer
+      // RPC rather than reading `profiles` directly — a direct read
+      // silently returns nothing for anyone else's row under typical RLS,
+      // which is exactly what caused this to only ever work in self-tests.
+      final messageIds = sent.map((m) => m['id'] as String).toList();
+      if (messageIds.isNotEmpty) {
         try {
-          final profilesData = await supabase
-              .from('profiles')
-              .select('id, username, zetramail')
-              .inFilter('id', recipientIds)
+          final recipientData = await supabase
+              .rpc('get_recipient_usernames', params: {'p_message_ids': messageIds})
               .timeout(const Duration(seconds: 15));
           final recipientMap = <String, Map<String, dynamic>>{
-            for (final p in List<Map<String, dynamic>>.from(profilesData as List)) p['id'] as String: p,
+            for (final r in List<Map<String, dynamic>>.from(recipientData as List)) r['message_id'] as String: r,
           };
           for (final m in sent) {
-            final r = recipientMap[m['user_id'] as String?];
-            m['recipient_username'] = r?['username'];
-            m['recipient_zetramail'] = r?['zetramail'];
+            final r = recipientMap[m['id'] as String];
+            m['recipient_username'] = r?['recipient_username'];
+            m['recipient_zetramail'] = r?['recipient_zetramail'];
           }
         } catch (_) {
           // Best effort — Sent tab falls back to the from_app label if
           // recipient lookup fails for any reason.
         }
+
       }
 
       setState(() {
@@ -2046,17 +2046,17 @@ class _MessagesScreenState extends State<MessagesScreen> {
     }
   }
 
-  /// Reply from an inbox message. Peer-to-peer ZetraMail rows now carry
-  /// `sender_zetramail` directly (stamped by `send_zetramail` on insert,
-  /// per the Supabase migration), so this opens Compose immediately —
-  /// no extra network round trip to look the sender up.
+  /// Reply from an inbox message. Gated on `sender_zetramail` being
+  /// present (see MessageDetailScreen.canReplyTo) rather than parsing
+  /// `from_app` text — that parsing was the actual bug behind "can't
+  /// reply to messages from a friend."
   void _openReply(Map<String, dynamic> m) {
-    final username = MessageDetailScreen.senderUsername(m);
-    final zetramail = m['sender_zetramail'] as String?;
-    if (username == null || zetramail == null) {
+    if (!MessageDetailScreen.canReplyTo(m)) {
       showZetraToast(context, "This message can't be replied to.", icon: Icons.info_outline);
       return;
     }
+    final zetramail = m['sender_zetramail'] as String;
+    final username = MessageDetailScreen.senderDisplayName(m);
 
     final rawSubject = (m['subject'] as String? ?? '').trim();
     final subject = rawSubject.toLowerCase().startsWith('re:') ? rawSubject : 'Re: $rawSubject';
@@ -2424,14 +2424,30 @@ class MessageDetailScreen extends StatelessWidget {
   final String from; // 'inbox' | 'archived' | 'sent'
   const MessageDetailScreen({super.key, required this.message, required this.from});
 
-  /// Peer-to-peer ZetraMail is stamped as `from_app = "zetramail:<username>"`
-  /// by the backend. System/app senders (e.g. "nai", "ztc") don't match
-  /// this pattern and return null, since replying to them isn't meaningful.
-  static String? senderUsername(Map<String, dynamic> message) {
-    final fromApp = (message['from_app'] as String?)?.toLowerCase().trim() ?? '';
-    if (!fromApp.startsWith('zetramail:')) return null;
-    final username = fromApp.substring('zetramail:'.length).trim();
-    return username.isEmpty ? null : username;
+  /// Whether this message can be replied to. Deliberately does NOT parse
+  /// `from_app` text — that field's exact format for genuine peer-to-peer
+  /// messages turned out not to match what was assumed here, which is
+  /// why reply silently failed for real messages from other people while
+  /// appearing to work in self-testing. `sender_zetramail` is the actual
+  /// data used to send the reply, so its presence is the correct signal:
+  /// if we have a real return address, replying is meaningful; system/app
+  /// senders (OTP codes etc.) never populate this field, so they're
+  /// correctly excluded without needing to know their exact naming.
+  static bool canReplyTo(Map<String, dynamic> message) {
+    final zetramail = message['sender_zetramail'] as String?;
+    return zetramail != null && zetramail.trim().isNotEmpty;
+  }
+
+  /// Best-effort display name for the sender, used only for the reply
+  /// screen's header — derived from their ZetraMail address rather than
+  /// the unreliable from_app text.
+  static String senderDisplayName(Map<String, dynamic> message) {
+    final zetramail = message['sender_zetramail'] as String?;
+    if (zetramail != null && zetramail.contains('@')) {
+      return zetramail.split('@').first;
+    }
+    final fromApp = (message['from_app'] as String?) ?? '';
+    return fromApp.contains(':') ? fromApp.split(':').last : fromApp;
   }
 
   String _formatFullDate(String iso) {
@@ -2465,7 +2481,7 @@ class MessageDetailScreen extends StatelessWidget {
     final avatarSeed = isSent && recipientUsername != null
         ? recipientUsername
         : (senderLabel.contains(':') ? senderLabel.split(':').last : senderLabel);
-    final canReply = isInbox && senderUsername(message) != null;
+    final canReply = isInbox && canReplyTo(message);
 
     return Scaffold(
       appBar: AppBar(
