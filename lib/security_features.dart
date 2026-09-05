@@ -375,9 +375,12 @@ class _SecurityScreenState extends State<SecurityScreen> {
       await SecurityEventService.instance.logEvent('PASSKEY_REGISTERED');
       if (mounted) showZetraToast(context, 'Fingerprint sign-in enabled');
       _loadPasskeyStatus();
-    } catch (_) {
+    } catch (e) {
+      // Showing the real error instead of a generic message — this
+      // flow has never been exercised on a real device yet, so
+      // hiding the actual cause here would make it undebuggable.
       if (mounted) {
-        showZetraToast(context, 'Could not set up fingerprint sign-in. Please try again.', icon: Icons.error_outline);
+        showZetraToast(context, 'Could not set up: $e', icon: Icons.error_outline);
       }
     } finally {
       if (mounted) setState(() => _isRegisteringPasskey = false);
