@@ -493,8 +493,8 @@ class _AuthEntryScreenState extends State<AuthEntryScreen> {
           builder: (_) => WelcomeScreen(username: username, onContinue: widget.onAuthenticated),
         ),
       );
-    } catch (_) {
-      setState(() => _errorMessage = 'No fingerprint sign-in set up on this device yet, or it was cancelled.');
+    } catch (e) {
+      setState(() => _errorMessage = 'Fingerprint sign-in failed: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
